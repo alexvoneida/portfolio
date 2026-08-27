@@ -8,7 +8,9 @@
  * `engaged` stays false until the pointer actually moves, so the spotlight does
  * not sit parked in a corner before the visitor has touched anything — and on
  * touch devices, which never fire pointermove without a press, it never turns on
- * at all.
+ * at all. It also drops back to false over a content panel: a pool of light
+ * behind copy the visitor is reading is a distraction, and the panel is opaque
+ * enough that most of it would be wasted there anyway.
  */
 export const pointerState = { x: 0, y: 0, engaged: false };
 
@@ -21,9 +23,13 @@ export function watchPointer() {
       // Coarse pointers report a position on tap; a spotlight that jumps to
       // wherever the visitor last tapped reads as a glitch, not an effect.
       if (event.pointerType !== "mouse") return;
+      // Position keeps tracking while the pointer is over a panel, so the
+      // spotlight is already in the right place when it comes back out instead
+      // of sliding across the valley to catch up.
       pointerState.x = event.clientX;
       pointerState.y = event.clientY;
-      pointerState.engaged = true;
+      const target = event.target;
+      pointerState.engaged = !(target instanceof Element && target.closest("[data-panel]"));
     };
     const onLeave = () => {
       pointerState.engaged = false;

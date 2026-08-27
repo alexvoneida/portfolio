@@ -19,7 +19,10 @@ export default function Section({
 }) {
   return (
     <section id={id} className="my-[26vh] scroll-mt-20 px-4 sm:px-8 lg:pl-[34%] lg:pr-10">
-      <div className="inset-panel mx-auto w-full max-w-3xl px-6 py-14 sm:py-16 lg:mx-0 lg:max-w-2xl lg:px-12">
+      <div
+        data-panel
+        className="inset-panel mx-auto w-full max-w-2xl px-6 py-12 sm:py-14 lg:mx-0 lg:max-w-xl lg:px-10"
+      >
         <div className="mb-10 flex items-baseline justify-between gap-4 border-b border-hairline pb-3">
           <h2 className="field-label text-fg!">
             <span className="text-mute">Sta {stationLabel(t)}</span> · {label}

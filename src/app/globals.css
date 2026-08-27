@@ -157,8 +157,8 @@
      copy still clears contrast when the spotlight passes behind it. The blur
      carries the difference — as the tint comes down it has to do more, so the
      two move together. */
-  background-color: rgb(5 5 5 / 0.42);
-  backdrop-filter: blur(28px);
+  background-color: rgb(5 5 5 / 0.32);
+  backdrop-filter: blur(32px);
   border: 1px solid var(--color-hairline);
 }
 

@@ -190,7 +190,10 @@ export default function Home() {
       </main>
 
       <footer className="px-4 pb-[18vh] sm:px-8 lg:pl-[34%] lg:pr-10">
-        <div className="inset-panel mx-auto w-full max-w-3xl px-6 py-10 lg:mx-0 lg:max-w-2xl lg:px-12">
+        <div
+          data-panel
+          className="inset-panel mx-auto w-full max-w-2xl px-6 py-9 lg:mx-0 lg:max-w-xl lg:px-10"
+        >
           <p className="font-mono text-xs leading-relaxed text-mute">
             The valley behind this page is a ridged-multifractal heightmap rendered with React
             Three Fiber. Scroll position drives the camera along the valley floor; the station and
