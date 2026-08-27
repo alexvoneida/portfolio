@@ -21,6 +21,7 @@ npm run lint
 | `src/lib/scroll.ts` | Scroll progress, kept outside React state. |
 | `src/lib/pointer.ts` | Pointer position, same treatment, feeding the spotlight and the parallax grid. |
 | `src/components/scene/` | React Three Fiber scene, shaders, and the static fallback. |
+| `src/components/scene/sceneState.ts` | Per-frame camera and spotlight state, written once and read by every material. |
 
 ### The single source of truth
 
@@ -74,6 +75,26 @@ without reintroducing a wireframe.
 `uBaseLight` floors the reveal: a hint of landscape on desktop before the first
 mouse move, considerably more on devices that cannot hover at all, where a pure
 spotlight would leave an empty black frame.
+
+### What else is in the valley
+
+- **River.** `heightAt` carves a channel along the same meander the camera
+  follows, and the water is a single quad at a fixed level. The terrain's own
+  depth decides where it shows, so the river appears exactly in the channel and
+  there is no river mesh that can drift out of sync with the heightmap.
+- **Grass and trees.** Instanced. Tufts are crossed quads tapered to a point in
+  the vertex shader, so a blade silhouette needs no alpha texture; wind
+  displacement scales with the square of height so the base stays planted.
+  Placement is rejection-sampled against water level and slope, since a tuft
+  standing in the river or jutting off a cliff face reads as a bug.
+- **Distant ranges.** Four flats beyond the far edge, with the ridge line cut in
+  the fragment stage — the heightmap simply stops, and without them the traverse
+  ends looking into empty sky. Each range is lighter than the sky behind it and
+  lighter than the one in front, which is the whole of aerial perspective.
+
+Every one of these reads the same `sceneState`, so the spotlight lights the
+terrain, the water and the foliage as a single pool of light rather than four
+that drift a frame apart.
 
 It is a uniform on the terrain shader, not a CSS mask. Masking would mean
 producing a full-viewport gradient every frame and handing it to the compositor;

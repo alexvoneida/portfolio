@@ -15,53 +15,43 @@ const encodeSRGB = /* glsl */ `
   }
 `;
 
-// The terrain pair is authored in GLSL3 because the contour lines need fwidth,
-// which is only core in GLSL ES 3.00. That means declaring the varyings and the
-// colour output explicitly — three does not shim gl_FragColor for GLSL3.
-export const terrainVertexShader = /* glsl */ `
-  out vec3 vWorld;
-  out vec3 vNrm;
-
-  void main() {
-    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-    vWorld = worldPosition.xyz;
-    vNrm = normalize(mat3(modelMatrix) * normal);
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
-  }
-`;
-
-export const terrainFragmentShader = /* glsl */ `
+/**
+ * Shared by every material in the scene so the spotlight lights the terrain,
+ * the water and the foliage as one pool of light. Version-agnostic: uses no
+ * GLSL3-only syntax, so it drops into the GLSL1 materials unchanged.
+ */
+export const spotlightChunk = /* glsl */ `
   uniform vec3 uCamPos;
-  uniform vec3 uVoid;
-  uniform vec3 uHaze;
-  uniform vec3 uMossDeep;
-  uniform vec3 uMossMid;
-  uniform vec3 uMossLit;
-  uniform vec3 uMossHi;
-  uniform vec3 uSoil;
-  uniform vec3 uRockDark;
-  uniform vec3 uRockLit;
-  uniform vec3 uLine;
-  uniform float uPeak;
-
-  // Spotlight, in device pixels. uReveal fades the whole effect in on first
-  // pointer movement and back out when the pointer leaves the window.
   uniform vec2 uCursor;
   uniform float uRadius;
   uniform float uReveal;
-
-  // Floor under the spotlight. Without it a device that cannot hover shows an
-  // empty black frame, and a desktop visitor sees nothing until they happen to
-  // move the mouse.
   uniform float uBaseLight;
 
-  in vec3 vWorld;
-  in vec3 vNrm;
+  /**
+   * Feathered falloff: solid to 40% of the radius, then four stops out to
+   * nothing, which gives a soft edge without the banding a single smoothstep
+   * produces at this size. Branchless so it stays well-defined wherever it is
+   * called from.
+   */
+  float spotlightFalloff(float d) {
+    float a = mix(1.00, 0.75, clamp((d - 0.40) / 0.20, 0.0, 1.0));
+    float b = mix(a, 0.40, clamp((d - 0.60) / 0.15, 0.0, 1.0));
+    float c = mix(b, 0.12, clamp((d - 0.75) / 0.13, 0.0, 1.0));
+    return mix(c, 0.0, clamp((d - 0.88) / 0.12, 0.0, 1.0));
+  }
 
-  layout(location = 0) out vec4 fragColor;
+  /**
+   * The gamma pulls the mid-falloff down so lit ground dissolves into the black
+   * instead of ending on a visible arc.
+   */
+  float revealAt(vec2 fragCoord) {
+    float d = distance(fragCoord, uCursor) / uRadius;
+    return max(uBaseLight, pow(spotlightFalloff(d), 1.7) * uReveal * 0.94);
+  }
+`;
 
-  ${encodeSRGB}
-
+/** Value noise shared by the terrain and the water ripples. */
+export const noiseChunk = /* glsl */ `
   float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
@@ -78,6 +68,45 @@ export const terrainFragmentShader = /* glsl */ `
       u.y
     );
   }
+`;
+
+// The terrain pair is authored in GLSL3 because the contour lines need fwidth,
+// which is only core in GLSL ES 3.00. That means declaring the varyings and the
+// colour output explicitly — three does not shim gl_FragColor for GLSL3.
+export const terrainVertexShader = /* glsl */ `
+  out vec3 vWorld;
+  out vec3 vNrm;
+
+  void main() {
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorld = worldPosition.xyz;
+    vNrm = normalize(mat3(modelMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+  }
+`;
+
+export const terrainFragmentShader = /* glsl */ `
+  // uCamPos and the spotlight uniforms arrive with spotlightChunk below.
+  uniform vec3 uVoid;
+  uniform vec3 uHaze;
+  uniform vec3 uMossDeep;
+  uniform vec3 uMossMid;
+  uniform vec3 uMossLit;
+  uniform vec3 uMossHi;
+  uniform vec3 uSoil;
+  uniform vec3 uRockDark;
+  uniform vec3 uRockLit;
+  uniform vec3 uLine;
+  uniform float uPeak;
+
+  in vec3 vWorld;
+  in vec3 vNrm;
+
+  layout(location = 0) out vec4 fragColor;
+
+  ${encodeSRGB}
+  ${spotlightChunk}
+  ${noiseChunk}
 
   float fbm(vec2 p) {
     float sum = 0.0;
@@ -88,19 +117,6 @@ export const terrainFragmentShader = /* glsl */ `
       amp *= 0.5;
     }
     return sum;
-  }
-
-  /**
-   * Feathered spotlight falloff. Solid to 40% of the radius, then four stops out
-   * to nothing, which gives a soft edge without the banding a single smoothstep
-   * produces at this size. Written branchlessly so it stays well-defined
-   * wherever it is called from.
-   */
-  float spotlight(float d) {
-    float a = mix(1.00, 0.75, clamp((d - 0.40) / 0.20, 0.0, 1.0));
-    float b = mix(a, 0.40, clamp((d - 0.60) / 0.15, 0.0, 1.0));
-    float c = mix(b, 0.12, clamp((d - 0.75) / 0.13, 0.0, 1.0));
-    return mix(c, 0.0, clamp((d - 0.88) / 0.12, 0.0, 1.0));
   }
 
   void main() {
@@ -187,12 +203,7 @@ export const terrainFragmentShader = /* glsl */ `
     // over it. Same information, and it keeps the greens intact.
     living = mix(living, living * 0.42, linework * 0.6);
 
-    float d = distance(gl_FragCoord.xy, uCursor) / uRadius;
-    // The gamma pulls the mid-falloff down so the lit moss dissolves into the
-    // black instead of ending on a visible arc.
-    float reveal = max(uBaseLight, pow(spotlight(d), 1.7) * uReveal * 0.94);
-
-    vec3 color = mix(unlit, living, reveal);
+    vec3 color = mix(unlit, living, revealAt(gl_FragCoord.xy));
     fragColor = vec4(toSRGB(color), 1.0);
   }
 `;
@@ -252,5 +263,239 @@ export const moteFragmentShader = /* glsl */ `
     float alpha = (1.0 - smoothstep(0.0, 0.5, d)) * vFade;
     if (alpha < 0.01) discard;
     gl_FragColor = vec4(toSRGB(uColor), alpha * 0.5);
+  }
+`;
+
+/**
+ * Water is two triangles at a fixed level; all of its shape comes from the
+ * fragment stage. The terrain's own depth decides where it is visible, so the
+ * river appears exactly in the carved channel with no separate river mesh.
+ */
+export const waterVertexShader = /* glsl */ `
+  varying vec3 vWorld;
+
+  void main() {
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vWorld = worldPosition.xyz;
+    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+  }
+`;
+
+export const waterFragmentShader = /* glsl */ `
+  uniform vec3 uDeep;
+  uniform vec3 uShallow;
+  uniform vec3 uSheen;
+  uniform vec3 uHaze;
+  uniform float uTime;
+
+  varying vec3 vWorld;
+
+  ${encodeSRGB}
+  ${spotlightChunk}
+  ${noiseChunk}
+
+  /** Two noise fields drifting against each other, so the surface never repeats. */
+  float ripple(vec2 p) {
+    return valueNoise(p + vec2(uTime * 0.07, uTime * 0.04)) * 0.6
+         + valueNoise(p * 2.7 - vec2(uTime * 0.11, uTime * 0.05)) * 0.4;
+  }
+
+  void main() {
+    vec2 p = vWorld.xz * 0.5;
+
+    // Gradient of the ripple field becomes the surface normal. Sampling by hand
+    // rather than with derivatives keeps the wave scale independent of how many
+    // pixels the water happens to cover.
+    float e = 0.35;
+    float h = ripple(p);
+    vec3 nrm = normalize(vec3(h - ripple(p + vec2(e, 0.0)), 0.35, h - ripple(p + vec2(0.0, e))));
+
+    vec3 view = normalize(uCamPos - vWorld);
+    vec3 lightDir = normalize(vec3(0.28, 0.82, 0.5));
+    vec3 halfVec = normalize(lightDir + view);
+
+    // Grazing angles reflect, steep angles look into the water.
+    float fresnel = pow(1.0 - clamp(dot(nrm, view), 0.0, 1.0), 3.0);
+    vec3 color = mix(uDeep, uShallow, fresnel);
+
+    float glint = pow(clamp(dot(nrm, halfVec), 0.0, 1.0), 90.0);
+    color += uSheen * glint * 0.9;
+
+    float dist = distance(vWorld, uCamPos);
+    color = mix(color, uHaze, pow(smoothstep(60.0, 900.0, dist), 0.8));
+
+    // Unlit water keeps only its specular, which is what a river looks like at
+    // night: black, with the surface picked out in moving highlights.
+    vec3 unlit = uDeep * 0.35 + uSheen * glint * 0.5;
+
+    gl_FragColor = vec4(toSRGB(mix(unlit, color, revealAt(gl_FragCoord.xy))), 1.0);
+  }
+`;
+
+/** Flat vertical gradient standing behind everything, so the sky is not a void. */
+export const skyFragmentShader = /* glsl */ `
+  uniform vec3 uHorizon;
+  uniform vec3 uZenith;
+
+  varying vec2 vUv;
+
+  ${encodeSRGB}
+
+  void main() {
+    // Steep falloff: the glow belongs in a band just above the ridges, not
+    // spread evenly over four thousand units of sky.
+    gl_FragColor = vec4(toSRGB(mix(uHorizon, uZenith, pow(vUv.y, 0.3))), 1.0);
+  }
+`;
+
+/**
+ * Layered ridge flats standing beyond the far edge of the valley. Without them
+ * the traverse ends looking into empty sky, since the heightmap simply stops.
+ * Cheap by construction: one quad per range, with the silhouette cut in the
+ * fragment stage.
+ */
+export const rangeVertexShader = /* glsl */ `
+  varying vec2 vUv;
+
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+export const rangeFragmentShader = /* glsl */ `
+  uniform vec3 uNear;
+  uniform vec3 uFar;
+  uniform float uSeed;
+  uniform float uRough;
+
+  varying vec2 vUv;
+
+  ${encodeSRGB}
+  ${noiseChunk}
+
+  /** Sum of octaves along the ridge line, biased upward into peaks. */
+  float ridgeLine(float x) {
+    float s = valueNoise(vec2(x * 3.0 + uSeed, uSeed)) * 0.55
+            + valueNoise(vec2(x * 7.0 + uSeed, uSeed * 1.7)) * 0.28
+            + valueNoise(vec2(x * 17.0 + uSeed, uSeed * 2.3)) * 0.17;
+    return pow(s, 1.0 + uRough);
+  }
+
+  void main() {
+    float ridge = 0.24 + ridgeLine(vUv.x) * 0.72;
+    if (vUv.y > ridge) discard;
+
+    // Lighter toward the ridge line, so each range reads as haze catching the
+    // sky rather than as a flat cut-out.
+    float toCrest = clamp(vUv.y / max(ridge, 1e-4), 0.0, 1.0);
+    vec3 color = mix(uNear, uFar, toCrest * toCrest);
+
+    gl_FragColor = vec4(toSRGB(color), 1.0);
+  }
+`;
+
+/**
+ * Grass tufts. Each instance is a pair of crossed quads tapered to a point, so
+ * the silhouette is a blade without needing an alpha texture, and the whole
+ * clump reads from any angle without billboarding.
+ */
+export const grassVertexShader = /* glsl */ `
+  uniform float uTime;
+
+  attribute vec3 tint;
+
+  varying vec3 vWorld;
+  varying vec3 vTint;
+  varying float vHeightFactor;
+
+  void main() {
+    vHeightFactor = uv.y;
+    vTint = tint;
+
+    vec3 local = position;
+    // Taper to a point: the quad becomes a blade. Both lateral axes, because
+    // the crossed pair lies in two different planes.
+    local.xz *= 1.0 - uv.y * 0.92;
+
+    vec4 world = instanceMatrix * vec4(local, 1.0);
+
+    // Wind. Displacement scales with the square of height so the base stays
+    // planted and only the tips travel.
+    float sway = sin(uTime * 1.1 + world.x * 0.09 + world.z * 0.07);
+    world.x += sway * uv.y * uv.y * 1.5;
+    world.z += cos(uTime * 0.8 + world.x * 0.05) * uv.y * uv.y * 0.9;
+
+    world = modelMatrix * world;
+    vWorld = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+export const grassFragmentShader = /* glsl */ `
+  uniform vec3 uBase;
+  uniform vec3 uTip;
+  uniform vec3 uHaze;
+
+  varying vec3 vWorld;
+  varying vec3 vTint;
+  varying float vHeightFactor;
+
+  ${encodeSRGB}
+  ${spotlightChunk}
+
+  void main() {
+    vec3 color = mix(uBase, uTip, vHeightFactor * vHeightFactor) * vTint;
+
+    float dist = distance(vWorld, uCamPos);
+    color = mix(color, uHaze, pow(smoothstep(60.0, 700.0, dist), 0.9));
+
+    // Barely present outside the light: unlit grass should read as texture on
+    // the silhouette, not as a field of grey blades.
+    vec3 unlit = color * 0.07;
+    gl_FragColor = vec4(toSRGB(mix(unlit, color, revealAt(gl_FragCoord.xy))), 1.0);
+  }
+`;
+
+/** Conifers on the valley walls, lit by the same key as the terrain. */
+export const treeVertexShader = /* glsl */ `
+  attribute vec3 tint;
+
+  varying vec3 vWorld;
+  varying vec3 vNrm;
+  varying vec3 vTint;
+
+  void main() {
+    vTint = tint;
+    vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vWorld = world.xyz;
+    vNrm = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+export const treeFragmentShader = /* glsl */ `
+  uniform vec3 uCanopy;
+  uniform vec3 uHaze;
+
+  varying vec3 vWorld;
+  varying vec3 vNrm;
+  varying vec3 vTint;
+
+  ${encodeSRGB}
+  ${spotlightChunk}
+
+  void main() {
+    vec3 nrm = normalize(vNrm);
+    vec3 lightDir = normalize(vec3(0.28, 0.82, 0.5));
+    float ndl = clamp(dot(nrm, lightDir), 0.0, 1.0);
+
+    vec3 color = uCanopy * vTint * (0.30 + ndl * 1.1);
+
+    float dist = distance(vWorld, uCamPos);
+    color = mix(color, uHaze, pow(smoothstep(80.0, 850.0, dist), 0.85));
+
+    vec3 unlit = color * 0.07;
+    gl_FragColor = vec4(toSRGB(mix(unlit, color, revealAt(gl_FragCoord.xy))), 1.0);
   }
 `;

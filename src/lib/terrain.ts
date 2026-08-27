@@ -14,7 +14,17 @@ export const TERRAIN = {
   /** Distance over which the walls rise from the corridor edge to full height. */
   valleyFalloff: 200,
   peakHeight: 200,
+  /** Half-width of the river channel cut along the valley centreline. */
+  channelHalf: 30,
+  channelDepth: 10,
 } as const;
+
+/**
+ * The river surface. Sits above the channel bed but below the surrounding
+ * floor, so water appears exactly where the channel was carved and nowhere
+ * else — no separate river mesh to keep in sync with the terrain.
+ */
+export const WATER_LEVEL = -12;
 
 export function mulberry32(seed: number) {
   let a = seed >>> 0;
@@ -63,7 +73,25 @@ export function heightAt(x: number, z: number) {
   const wall = smoothstep(TERRAIN.valleyHalf, TERRAIN.valleyHalf + TERRAIN.valleyFalloff, distanceFromCenter);
   const crest = ridged(x * 0.0042, z * 0.0042);
   const floorDetail = noise2D(x * 0.02, z * 0.02) * 5;
-  return crest * TERRAIN.peakHeight * wall + floorDetail * (1 - wall) - 6;
+
+  // The channel follows the same meander as the flight path, so the camera
+  // travels along the river rather than across it.
+  const channel = 1 - smoothstep(0, TERRAIN.channelHalf, distanceFromCenter);
+  const bed = channel * channel * TERRAIN.channelDepth;
+
+  return crest * TERRAIN.peakHeight * wall + floorDetail * (1 - wall) - 6 - bed;
+}
+
+/**
+ * Surface steepness at a point, 0 flat to 1 vertical. Used to keep scattered
+ * foliage off cliff faces, where instances would stick out at right angles to
+ * the ground.
+ */
+export function slopeAt(x: number, z: number, step = 4) {
+  const dx = heightAt(x + step, z) - heightAt(x - step, z);
+  const dz = heightAt(x, z + step) - heightAt(x, z - step);
+  const gradient = Math.hypot(dx, dz) / (2 * step);
+  return gradient / Math.hypot(gradient, 1);
 }
 
 /** World-space z for a given progress along the flight, 0 at the near edge. */

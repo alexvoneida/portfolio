@@ -25,9 +25,10 @@ export default function MapBackdrop() {
       {/* Above the canvas, not behind it: the canvas paints an opaque frame
           every tick, so a grid underneath would never be seen. */}
       <ParallaxGrid />
-      {/* Sinks the top of the frame toward black so the fixed header and the
-          hero type always have a quiet field to sit on. */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(5,5,5,0.85)_0%,rgba(5,5,5,0.3)_22%,rgba(5,5,5,0)_50%)]" />
+      {/* Sinks the top of the frame so the hero type has a quiet field to sit
+          on. Kept light: the horizon lands in this band at the end of the
+          traverse, and a heavier wash crushes the distant ranges to black. */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(5,5,5,0.55)_0%,rgba(5,5,5,0.15)_20%,rgba(5,5,5,0)_44%)]" />
     </div>
   );
 }

@@ -9,6 +9,16 @@ import { pointerState, watchPointer } from "@/lib/pointer";
 import { scrollState, watchScroll } from "@/lib/scroll";
 import { TERRAIN, flightPointAt, heightAt, mulberry32 } from "@/lib/terrain";
 import { sections } from "@/content/portfolio";
+import DistantRange from "./DistantRange";
+import { Grass, Trees } from "./Foliage";
+import Water from "./Water";
+import {
+  SPOTLIGHT_RADIUS,
+  sceneState,
+  spotlightUniforms,
+  syncSpotlight,
+  type SpotlightUniforms,
+} from "./sceneState";
 import {
   moteFragmentShader,
   moteVertexShader,
@@ -38,23 +48,15 @@ const PALETTE = {
   line: new THREE.Color("#e8ecd8"),
   accent: new THREE.Color("#6abc92"),
   dust: new THREE.Color("#59614a"),
+  grassBase: new THREE.Color("#141d07"),
+  grassTip: new THREE.Color("#63741a"),
+  canopy: new THREE.Color("#1a2711"),
+  waterDeep: new THREE.Color("#060d0a"),
+  waterShallow: new THREE.Color("#22403a"),
+  waterSheen: new THREE.Color("#cfe8d8"),
 };
 
-/** Spotlight radius in CSS pixels, scaled to device pixels in the shader. */
-const SPOTLIGHT_RADIUS = 260;
-
-/**
- * Read once at module scope rather than per render. A device either has a
- * hovering pointer for the whole visit or it does not, and this only decides
- * how much of the landscape is lit without one.
- */
-const canHover =
-  typeof window !== "undefined" && window.matchMedia("(hover: hover)").matches;
-
 const MESH_Z = TERRAIN.zNear - TERRAIN.depth / 2;
-
-/** Shared every frame so the terrain shader can measure haze from the camera. */
-const cameraPosition = new THREE.Vector3();
 
 function useTerrainGeometry(quality: SceneQuality) {
   return useMemo(() => {
@@ -81,12 +83,10 @@ function useTerrainGeometry(quality: SceneQuality) {
 
 function Terrain({ quality }: { quality: SceneQuality }) {
   const geometry = useTerrainGeometry(quality);
-  const size = useThree((state) => state.size);
-  const dpr = useThree((state) => state.viewport.dpr);
 
   const uniforms = useMemo(
     () => ({
-      uCamPos: { value: new THREE.Vector3() },
+      ...spotlightUniforms(),
       uVoid: { value: PALETTE.void },
       uHaze: { value: PALETTE.haze },
       uMossDeep: { value: PALETTE.mossDeep },
@@ -98,12 +98,6 @@ function Terrain({ quality }: { quality: SceneQuality }) {
       uRockLit: { value: PALETTE.rockLit },
       uLine: { value: PALETTE.line },
       uPeak: { value: TERRAIN.peakHeight },
-      uCursor: { value: new THREE.Vector2() },
-      uRadius: { value: SPOTLIGHT_RADIUS },
-      uReveal: { value: 0 },
-      // A hint of the landscape where a spotlight can reach it, considerably
-      // more where one never can.
-      uBaseLight: { value: canHover ? 0.12 : 0.42 },
     }),
     [],
   );
@@ -112,38 +106,12 @@ function Terrain({ quality }: { quality: SceneQuality }) {
   // object: the material is the thing actually bound to the program, and this
   // is the only reference guaranteed to be the committed one.
   const material = useRef<THREE.ShaderMaterial>(null);
-  const smoothed = useRef(new THREE.Vector2());
-  const revealed = useRef(0);
-  const primed = useRef(false);
 
   useEffect(() => () => geometry.dispose(), [geometry]);
-  useEffect(() => watchPointer(), []);
 
-  useFrame((_, delta) => {
+  useFrame(() => {
     const live = material.current?.uniforms;
-    if (!live) return;
-
-    live.uCamPos.value.copy(cameraPosition);
-
-    // Snap on the first engagement. Lerping from the origin would drag a visible
-    // spotlight across the screen from the top-left corner.
-    if (pointerState.engaged && !primed.current) {
-      smoothed.current.set(pointerState.x, pointerState.y);
-      primed.current = true;
-    }
-
-    const ease = 1 - Math.pow(0.0001, Math.min(delta, 0.1));
-    smoothed.current.x += (pointerState.x - smoothed.current.x) * ease;
-    smoothed.current.y += (pointerState.y - smoothed.current.y) * ease;
-
-    const target = pointerState.engaged ? 1 : 0;
-    revealed.current += (target - revealed.current) * Math.min(1, delta * 4);
-    live.uReveal.value = revealed.current;
-
-    // gl_FragCoord is measured in device pixels from the bottom-left; the
-    // pointer arrives in CSS pixels from the top-left.
-    live.uCursor.value.set(smoothed.current.x * dpr, (size.height - smoothed.current.y) * dpr);
-    live.uRadius.value = SPOTLIGHT_RADIUS * dpr;
+    if (live) syncSpotlight(live as unknown as SpotlightUniforms);
   });
 
   return (
@@ -294,12 +262,27 @@ function Motes({ quality }: { quality: SceneQuality }) {
 
 const lookTarget = new THREE.Vector3();
 
-function FlightCamera() {
+/**
+ * Drives everything the rest of the scene reads: the camera along the traverse,
+ * and the spotlight the terrain, water and foliage all share. Doing this in one
+ * place means the four materials cannot end up a frame apart from each other.
+ *
+ * Runs first in the tree, so `sceneState` is already current by the time the
+ * other `useFrame` callbacks copy out of it.
+ */
+function SceneDriver() {
   const camera = useThree((state) => state.camera);
+  const size = useThree((state) => state.size);
+  const dpr = useThree((state) => state.viewport.dpr);
+
   const smoothed = useRef(0);
   const bank = useRef(0);
+  const cursor = useRef(new THREE.Vector2());
+  const revealed = useRef(0);
+  const primed = useRef(false);
 
   useEffect(() => watchScroll(), []);
+  useEffect(() => watchPointer(), []);
 
   useFrame(({ clock }, delta) => {
     // Exponential damping expressed against elapsed time, so the feel of the
@@ -311,7 +294,27 @@ function FlightCamera() {
     const [x, y, z] = flightPointAt(t);
     const bob = Math.sin(clock.elapsedTime * 0.45) * 1.6;
     camera.position.set(x, y + bob, z);
-    cameraPosition.copy(camera.position);
+    sceneState.cameraPosition.copy(camera.position);
+
+    // Snap on the first engagement. Lerping from the origin would drag a
+    // visible spotlight across the screen from the top-left corner.
+    if (pointerState.engaged && !primed.current) {
+      cursor.current.set(pointerState.x, pointerState.y);
+      primed.current = true;
+    }
+
+    const pointerEase = 1 - Math.pow(0.0001, Math.min(delta, 0.1));
+    cursor.current.x += (pointerState.x - cursor.current.x) * pointerEase;
+    cursor.current.y += (pointerState.y - cursor.current.y) * pointerEase;
+
+    const target = pointerState.engaged ? 1 : 0;
+    revealed.current += (target - revealed.current) * Math.min(1, delta * 4);
+    sceneState.reveal = revealed.current;
+
+    // gl_FragCoord is measured in device pixels from the bottom-left; the
+    // pointer arrives in CSS pixels from the top-left.
+    sceneState.cursor.set(cursor.current.x * dpr, (size.height - cursor.current.y) * dpr);
+    sceneState.radius = SPOTLIGHT_RADIUS * dpr;
 
     // Deliberately unclamped: the path is analytic, so looking past t=1 keeps a
     // valid heading at the very end instead of collapsing onto the camera.
@@ -337,11 +340,27 @@ export default function TerrainScene({ quality }: { quality: SceneQuality }) {
         antialias: quality === "high",
         powerPreference: "high-performance",
       }}
-      camera={{ fov: 62, near: 1, far: 2600 }}
+      // Far enough to keep the outermost range inside the frustum from the
+      // start of the traverse, where it is over 4000 units away.
+      camera={{ fov: 62, near: 2, far: 9000 }}
     >
       <color attach="background" args={[PALETTE.sky.getHex()]} />
-      <FlightCamera />
+      <SceneDriver />
+      <DistantRange />
       <Terrain quality={quality} />
+      <Water
+        deep={PALETTE.waterDeep}
+        shallow={PALETTE.waterShallow}
+        sheen={PALETTE.waterSheen}
+        haze={PALETTE.haze}
+      />
+      <Trees quality={quality} canopy={PALETTE.canopy} haze={PALETTE.haze} />
+      <Grass
+        quality={quality}
+        base={PALETTE.grassBase}
+        tip={PALETTE.grassTip}
+        haze={PALETTE.haze}
+      />
       <Stakes />
       <Motes quality={quality} />
     </Canvas>
