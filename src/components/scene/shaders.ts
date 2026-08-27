@@ -572,6 +572,13 @@ export const rangeFragmentShader = /* glsl */ `
   uniform float uSeed;
   uniform float uRough;
   uniform float uDetail;
+  /**
+   * The quad's width as a multiple of the reference width, applied to every
+   * horizontal frequency below. The flats have to be wide enough that their
+   * ends never enter frame, and without this a wider quad would simply stretch
+   * the same handful of peaks across it.
+   */
+  uniform float uSpan;
 
   varying vec2 vUv;
 
@@ -587,7 +594,7 @@ export const rangeFragmentShader = /* glsl */ `
   }
 
   void main() {
-    float ridge = 0.24 + ridgeLine(vUv.x) * 0.72;
+    float ridge = 0.24 + ridgeLine(vUv.x * uSpan) * 0.72;
     if (vUv.y > ridge) discard;
 
     // Lighter toward the ridge line, so each range reads as haze catching the
@@ -598,7 +605,7 @@ export const rangeFragmentShader = /* glsl */ `
     // Just enough relief to stop the flats reading as paper. Anisotropic on
     // purpose: stretched vertically, the noise falls into gullies rather than
     // mottling like lichen.
-    vec2 faceUv = vec2(vUv.x * 190.0, vUv.y * 34.0);
+    vec2 faceUv = vec2(vUv.x * uSpan * 190.0, vUv.y * 34.0);
     float rock = valueNoise(faceUv) * 0.6 + valueNoise(faceUv * 2.6) * 0.4;
     color *= 1.0 + (rock - 0.5) * 0.5 * uDetail;
 
@@ -606,13 +613,13 @@ export const rangeFragmentShader = /* glsl */ `
     // above it are capped and the saddles between them stay bare. A term based
     // on height-as-a-fraction-of-this-peak instead puts the same band on every
     // summit regardless of how tall it is, which reads as paint.
-    float snowline = 0.58 + valueNoise(vec2(vUv.x * 9.0 + uSeed, 3.0)) * 0.09;
+    float snowline = 0.58 + valueNoise(vec2(vUv.x * uSpan * 9.0 + uSeed, 3.0)) * 0.09;
     float capped = smoothstep(snowline, snowline + 0.12, vUv.y);
     // Broken by its own coarse field, not by the rock noise: the rock term runs
-    // at 190 cycles across the quad, and snow keyed to it comes out as
+    // hundreds of cycles across the quad, and snow keyed to it comes out as
     // salt-and-pepper camouflage rather than as drifts. Wide smoothstep for the
     // same reason — a tight one turns a smooth field back into speckle.
-    float drift = valueNoise(vec2(vUv.x * 13.0 + uSeed, vUv.y * 5.0));
+    float drift = valueNoise(vec2(vUv.x * uSpan * 13.0 + uSeed, vUv.y * 5.0));
     float alpine = capped * smoothstep(0.28, 0.85, drift) * smoothstep(0.58, 0.90, toCrest);
     color = mix(color, uSnow, alpine * 0.5 * uDetail);
 

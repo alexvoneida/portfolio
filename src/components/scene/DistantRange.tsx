@@ -29,11 +29,19 @@ const FAR_EDGE = TERRAIN.zNear - TERRAIN.depth;
 // Kept dark: these sit behind everything and should read as depth, not as
 // subject. `detail` fades the rock and snow out with distance, since the
 // farthest range is only a few dozen pixels tall on screen.
+//
+// Widths are set so the ends stay out of frame at 32:9 from the near end of
+// the traverse, the worst case: the nearest flat is ~2900 units away, where the
+// frustum already spans over 12000 units. The shader scales its horizontal
+// frequencies by the same factor, so a wider quad carries more peaks rather
+// than the same peaks stretched across it. Two triangles either way, so the
+// headroom is free.
+const REFERENCE_WIDTH = 3200;
 const LAYERS = [
-  { z: FAR_EDGE - 120, width: 3200, height: 900, seed: 1.7, rough: 0.55, detail: 1, near: "#12160e", far: "#0b0e08" },
-  { z: FAR_EDGE - 620, width: 4400, height: 1200, seed: 4.3, rough: 0.4, detail: 0.8, near: "#161b11", far: "#0f130c" },
-  { z: FAR_EDGE - 1300, width: 6000, height: 1600, seed: 8.1, rough: 0.3, detail: 0.55, near: "#1b2116", far: "#131810" },
-  { z: FAR_EDGE - 2200, width: 8000, height: 2000, seed: 12.9, rough: 0.2, detail: 0.35, near: "#20261b", far: "#171c14" },
+  { z: FAR_EDGE - 120, width: 14000, height: 900, seed: 1.7, rough: 0.55, detail: 1, near: "#12160e", far: "#0b0e08" },
+  { z: FAR_EDGE - 620, width: 17000, height: 1200, seed: 4.3, rough: 0.4, detail: 0.8, near: "#161b11", far: "#0f130c" },
+  { z: FAR_EDGE - 1300, width: 21000, height: 1600, seed: 8.1, rough: 0.3, detail: 0.55, near: "#1b2116", far: "#131810" },
+  { z: FAR_EDGE - 2200, width: 26000, height: 2000, seed: 12.9, rough: 0.2, detail: 0.35, near: "#20261b", far: "#171c14" },
 ];
 
 /** Below the valley floor, so the terrain always occludes the ranges' feet. */
@@ -48,6 +56,7 @@ function Range({ layer }: { layer: (typeof LAYERS)[number] }) {
       uSeed: { value: layer.seed },
       uRough: { value: layer.rough },
       uDetail: { value: layer.detail },
+      uSpan: { value: layer.width / REFERENCE_WIDTH },
     }),
     [layer],
   );

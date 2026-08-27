@@ -155,9 +155,10 @@
 @utility inset-panel {
   /* Transparent enough that the valley shows through, opaque enough that body
      copy still clears contrast when the spotlight passes behind it. The blur
-     carries the difference. */
-  background-color: rgb(5 5 5 / 0.55);
-  backdrop-filter: blur(22px);
+     carries the difference — as the tint comes down it has to do more, so the
+     two move together. */
+  background-color: rgb(5 5 5 / 0.42);
+  backdrop-filter: blur(28px);
   border: 1px solid var(--color-hairline);
 }
 
@@ -221,7 +222,7 @@
      passes over anything paler than itself, which is most of the sky. The
      glass takes the luminance of whatever is behind it and the labels carry
      their own contrast instead. */
-  --glass-tint: rgba(255, 255, 255, 0.05);
+  --glass-tint: rgba(255, 255, 255, 0.03);
   background-blend-mode: normal;
 
   /* Compounded with .liquid-glass so this wins on specificity rather than on
