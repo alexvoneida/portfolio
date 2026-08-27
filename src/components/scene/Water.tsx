@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
-import { TERRAIN, WATER_LEVEL } from "@/lib/terrain";
+import { TARN_DISCS, TERRAIN, WATER_LEVEL } from "@/lib/terrain";
 import { spotlightUniforms, syncSpotlight, type SpotlightUniforms } from "./sceneState";
 import { waterFragmentShader, waterVertexShader } from "./shaders";
 
@@ -34,6 +34,9 @@ export default function Water({ deep, shallow, sheen, haze }: WaterProps) {
       uSheen: { value: sheen },
       uHaze: { value: haze },
       uTime: { value: 0 },
+      // Packed as xz-centre and radius. A uniform array rather than a texture:
+      // there are half a dozen of them and they never move.
+      uTarns: { value: TARN_DISCS.map(([x, z, radius]) => new THREE.Vector3(x, z, radius)) },
     }),
     [deep, shallow, sheen, haze],
   );
@@ -58,6 +61,7 @@ export default function Water({ deep, shallow, sheen, haze }: WaterProps) {
       <shaderMaterial
         ref={material}
         uniforms={uniforms}
+        defines={{ TARN_COUNT: TARN_DISCS.length }}
         vertexShader={waterVertexShader}
         fragmentShader={waterFragmentShader}
       />

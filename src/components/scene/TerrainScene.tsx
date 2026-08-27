@@ -11,6 +11,7 @@ import { TERRAIN, flightPointAt, heightAt, mulberry32 } from "@/lib/terrain";
 import { sections } from "@/content/portfolio";
 import DistantRange from "./DistantRange";
 import { Grass, Trees } from "./Foliage";
+import TrailMarkers from "./TrailMarkers";
 import Water from "./Water";
 import {
   SPOTLIGHT_RADIUS,
@@ -56,6 +57,8 @@ const PALETTE = {
   waterDeep: new THREE.Color("#060d0a"),
   waterShallow: new THREE.Color("#22403a"),
   waterSheen: new THREE.Color("#cfe8d8"),
+  signBody: new THREE.Color("#6b5a44"),
+  signMark: new THREE.Color("#c9d4b4"),
 };
 
 const MESH_Z = TERRAIN.zNear - TERRAIN.depth / 2;
@@ -382,6 +385,12 @@ export default function TerrainScene({ quality }: { quality: SceneQuality }) {
           haze={PALETTE.haze}
         />
       )}
+      <TrailMarkers
+        quality={quality}
+        body={PALETTE.signBody}
+        mark={PALETTE.signMark}
+        haze={PALETTE.haze}
+      />
       <Stakes />
       <Motes quality={quality} />
     </Canvas>

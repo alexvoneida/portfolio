@@ -75,6 +75,83 @@ export function valleyCenterX(z: number) {
   return Math.sin(z * 0.0045) * 70 + Math.sin(z * 0.0013 + 1.7) * 110;
 }
 
+/** World-space z for a given progress along the flight, 0 at the near edge. */
+export function zAtProgress(t: number) {
+  return TERRAIN.zNear - 120 - t * TERRAIN.traverse;
+}
+
+export function flightPointAt(t: number): [number, number, number] {
+  const z = zAtProgress(t);
+  return [valleyCenterX(z), TERRAIN.flightHeight, z];
+}
+
+/**
+ * Tarns along the valley floor, authored against flight progress so they can be
+ * spaced between the sections rather than by eye in world coordinates.
+ *
+ * All on the west side, because the footpath runs up the east side and a trail
+ * that walks into a pond is worse than one that passes it. `offset` is far
+ * enough out to be off the route and clear of the channel, but not up on the
+ * shoulders: water dug into a slope is hidden behind its own near rim from a
+ * camera flying only fifty units above it, which is a thing you cannot see in a
+ * screenshot of somewhere the tarn is not.
+ */
+const TARNS = [
+  { t: 0.12, offset: -128, radius: 34, depth: 6 },
+  { t: 0.30, offset: -142, radius: 30, depth: 5 },
+  { t: 0.46, offset: -134, radius: 36, depth: 7 },
+  { t: 0.62, offset: -150, radius: 31, depth: 5 },
+  { t: 0.79, offset: -126, radius: 35, depth: 6 },
+  { t: 0.93, offset: -138, radius: 32, depth: 6 },
+].map(({ t, offset, radius, depth }) => {
+  const z = zAtProgress(t);
+  return { x: valleyCenterX(z) + offset, z, radius, bed: WATER_LEVEL - depth };
+});
+
+/** Centre and radius of each tarn, for the water shader to still its surface. */
+export const TARN_DISCS = TARNS.map(({ x, z, radius }) => [x, z, radius] as const);
+
+/** Shoreline sits just clear of the water, so a tarn has a beach, not a kerb. */
+const TARN_SHORE = WATER_LEVEL + 1.5;
+
+/**
+ * Carves a tarn in two stages: a long shallow apron down to a shore just above
+ * the water line, then the bed below it.
+ *
+ * The apron is the part that matters and the reason a single blend is not
+ * enough. The camera flies about fifty units above the water, so its sightline
+ * into a tarn two hundred units away descends at only ten or so degrees; any
+ * bank steeper than that hides the surface behind itself, and the tarn is
+ * carved perfectly and visible from nowhere.
+ */
+function withTarns(height: number, x: number, z: number) {
+  for (const tarn of TARNS) {
+    const distance = Math.hypot(x - tarn.x, z - tarn.z) / tarn.radius;
+    if (distance >= 1.7) continue;
+    const apron = 1 - smoothstep(0.75, 1.7, distance);
+    let carved = height * (1 - apron) + TARN_SHORE * apron;
+    const pan = 1 - smoothstep(0.2, 0.75, distance);
+    carved = carved * (1 - pan) + tarn.bed * pan;
+    height = carved;
+  }
+  return height;
+}
+
+/**
+ * A footpath contouring along one side of the valley. Analytic rather than
+ * baked, because the terrain shader has to draw the same line the placement
+ * pass keeps foliage off — a texture or a spline would have to be shared
+ * between the CPU and the GPU, where two identical expressions do not.
+ */
+export function trailCenterX(z: number) {
+  return valleyCenterX(z) + 118 + Math.sin(z * 0.017) * 27 + Math.sin(z * 0.006 + 2.1) * 41;
+}
+
+/** Half-width, breathing along the path so it narrows and opens like a real one. */
+export function trailHalfAt(z: number) {
+  return 2.6 * (0.72 + 0.28 * Math.sin(z * 0.009));
+}
+
 export function heightAt(x: number, z: number) {
   const distanceFromCenter = Math.abs(x - valleyCenterX(z));
   const wall = smoothstep(TERRAIN.valleyHalf, TERRAIN.valleyHalf + TERRAIN.valleyFalloff, distanceFromCenter);
@@ -86,7 +163,8 @@ export function heightAt(x: number, z: number) {
   const channel = 1 - smoothstep(0, TERRAIN.channelHalf, distanceFromCenter);
   const bed = channel * channel * TERRAIN.channelDepth;
 
-  return crest * TERRAIN.peakHeight * wall + floorDetail * (1 - wall) - 6 - bed;
+  const surface = crest * TERRAIN.peakHeight * wall + floorDetail * (1 - wall) - 6 - bed;
+  return withTarns(surface, x, z);
 }
 
 /**
@@ -107,12 +185,3 @@ export function slopeAt(x: number, z: number, height: number, step = 4) {
   return gradient / Math.hypot(gradient, 1);
 }
 
-/** World-space z for a given progress along the flight, 0 at the near edge. */
-export function zAtProgress(t: number) {
-  return TERRAIN.zNear - 120 - t * TERRAIN.traverse;
-}
-
-export function flightPointAt(t: number): [number, number, number] {
-  const z = zAtProgress(t);
-  return [valleyCenterX(z), TERRAIN.flightHeight, z];
-}

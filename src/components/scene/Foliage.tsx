@@ -12,6 +12,8 @@ import {
   heightAt,
   mulberry32,
   slopeAt,
+  trailCenterX,
+  trailHalfAt,
 } from "@/lib/terrain";
 import { spotlightUniforms, syncSpotlight, type SpotlightUniforms } from "./sceneState";
 import {
@@ -170,6 +172,15 @@ function useInstances(placement: Placement, geometry: THREE.BufferGeometry) {
   return mesh;
 }
 
+/**
+ * Clear of the footpath. The margin past the tread is what keeps the edge from
+ * looking mown: blades stop a little short, so the path has a verge rather than
+ * a hairline.
+ */
+function offTrail(x: number, z: number, margin: number) {
+  return Math.abs(x - trailCenterX(z)) > trailHalfAt(z) + margin;
+}
+
 const scratchPosition = new THREE.Vector3();
 const scratchQuaternion = new THREE.Quaternion();
 const scratchScale = new THREE.Vector3();
@@ -210,7 +221,8 @@ export function Grass({
         detail ? 0.3 : 0.55,
         // Off the cliffs and out of the river; a tuft standing in the water or
         // jutting sideways off a rock face reads as a bug.
-        (x, z, height) => height > WATER_LEVEL + 1.5 && slopeAt(x, z, height) < 0.55,
+        (x, z, height) =>
+          height > WATER_LEVEL + 1.5 && slopeAt(x, z, height) < 0.55 && offTrail(x, z, 0.8),
         (random, x, z, height, matrix, tint) => {
           scratchPosition.set(x, height, z);
           scratchQuaternion.setFromAxisAngle(upAxis, random() * Math.PI);
@@ -297,7 +309,8 @@ export function Trees({
           height > WATER_LEVEL + 6 &&
           height > 4 &&
           height < TERRAIN.peakHeight * 0.42 &&
-          slopeAt(x, z, height) < 0.62,
+          slopeAt(x, z, height) < 0.62 &&
+          offTrail(x, z, 2.5),
         (random, x, z, height, matrix, tint) => {
           const trunk = 7 + random() * 9;
           // Cone geometry is centred on its own height, so it must be lifted by

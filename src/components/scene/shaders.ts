@@ -71,7 +71,7 @@ export const spotlightChunk = /* glsl */ `
    */
   float rimAt(vec2 fragCoord) {
     float d = distance(fragCoord, uCursor) / uRadius;
-    float band = 1.0 - clamp(abs(d - 0.90) / 0.05, 0.0, 1.0);
+    float band = 1.0 - clamp(abs(d - 0.90) / 0.022, 0.0, 1.0);
     return band * band * uReveal;
   }
 `;
@@ -87,6 +87,25 @@ export const spotlightChunk = /* glsl */ `
  * offset has grown large enough. Wrapping keeps hash inputs small, and because
  * the field is genuinely periodic at the wrap there is no seam.
  */
+/**
+ * The footpath, in the same closed form as trailCenterX in src/lib/terrain.ts.
+ * The two have to agree: the CPU keeps foliage off the path and the GPU draws
+ * it, and a path with grass growing down the middle of it is not a path.
+ */
+export const trailChunk = /* glsl */ `
+  float valleyCenterXAt(float z) {
+    return sin(z * 0.0045) * 70.0 + sin(z * 0.0013 + 1.7) * 110.0;
+  }
+
+  float trailCenterXAt(float z) {
+    return valleyCenterXAt(z) + 118.0 + sin(z * 0.017) * 27.0 + sin(z * 0.006 + 2.1) * 41.0;
+  }
+
+  float trailHalfAt(float z) {
+    return 2.6 * (0.72 + 0.28 * sin(z * 0.009));
+  }
+`;
+
 export const noiseChunk = /* glsl */ `
   const float NOISE_PERIOD = 1024.0;
 
@@ -149,6 +168,7 @@ export const terrainFragmentShader = /* glsl */ `
   ${encodeSRGB}
   ${spotlightChunk}
   ${noiseChunk}
+  ${trailChunk}
 
   float fbm(vec2 p) {
     float sum = 0.0;
@@ -280,6 +300,20 @@ export const terrainFragmentShader = /* glsl */ `
     // over it. Same information, and it keeps the greens intact.
     living = mix(living, living * 0.42, linework * 0.6);
 
+    // The footpath: moss worn back to grit. Held to ground shallow enough to
+    // walk, so it stops at the foot of a wall instead of climbing it, and kept
+    // low-contrast — it should be something you come across, not a stripe
+    // painted down the valley.
+    float treadHalf = trailHalfAt(vWorld.z);
+    float offPath = abs(vWorld.x - trailCenterXAt(vWorld.z));
+    float tread = 1.0 - smoothstep(treadHalf * 0.55, treadHalf, offPath);
+    tread *= smoothstep(0.62, 0.88, nrm.y) * detailFade;
+    // Keyed off the dark rock rather than the lit rock: pale grit reads as a
+    // ribbon painted down the valley, which is the opposite of something you
+    // have to go and find.
+    vec3 grit = mix(uSoil, uRockDark, 0.30 + grain * 0.34) * (0.55 + ndl * 0.75);
+    living = mix(living, grit, tread * 0.5);
+
     vec3 color = mix(unlit, living, revealAt(gl_FragCoord.xy));
     // Pale rather than green: the rim should read as the wall of the glass, not
     // as more moss.
@@ -367,12 +401,27 @@ export const waterFragmentShader = /* glsl */ `
   uniform vec3 uSheen;
   uniform vec3 uHaze;
   uniform float uTime;
+  /** Centre xz and radius of each tarn, so still water can be told from river. */
+  uniform vec3 uTarns[TARN_COUNT];
 
   varying vec3 vWorld;
 
   ${encodeSRGB}
   ${spotlightChunk}
   ${noiseChunk}
+
+  /**
+   * 1 well inside a tarn, 0 out on the river. The same quad serves both, so
+   * without this the tarns would be lit by a current running through them.
+   */
+  float stillness(vec2 p) {
+    float still = 0.0;
+    for (int i = 0; i < TARN_COUNT; i++) {
+      float d = distance(p, uTarns[i].xy) / max(uTarns[i].z, 1e-3);
+      still = max(still, 1.0 - smoothstep(0.55, 1.05, d));
+    }
+    return still;
+  }
 
   /**
    * Three scales carried downstream at different rates. The sampling offset is
@@ -404,6 +453,7 @@ export const waterFragmentShader = /* glsl */ `
   void main() {
     vec2 p = vWorld.xz * 0.5;
     float dist = distance(vWorld, uCamPos);
+    float still = stillness(vWorld.xz);
     float spot = spotAt(gl_FragCoord.xy);
     float chopFade = spot * (1.0 - smoothstep(40.0, 200.0, dist));
 
@@ -426,7 +476,9 @@ export const waterFragmentShader = /* glsl */ `
     dz += (fh - chop(p + vec2(0.0, fe))) * chopFade * 1.6;
     // The low y term is what gives the surface visible relief: near 1.0 the
     // normals barely tilt and the river reads as flat glass.
-    vec3 nrm = normalize(vec3(dx * 2.0, 0.3, dz * 2.0));
+    // Flatter and glassier in a tarn: standing water has no chop of its own,
+    // and leaving the relief up is what would give a pond a current.
+    vec3 nrm = normalize(vec3(dx * 2.0 * (1.0 - still * 0.82), 0.3, dz * 2.0 * (1.0 - still * 0.82)));
 
     vec3 view = normalize(uCamPos - vWorld);
     vec3 lightDir = normalize(vec3(0.28, 0.82, 0.5));
@@ -434,6 +486,10 @@ export const waterFragmentShader = /* glsl */ `
 
     // Grazing angles reflect, steep angles look into the water.
     float fresnel = pow(1.0 - clamp(dot(nrm, view), 0.0, 1.0), 3.0);
+    // Standing water at night is dark — it mirrors a black sky. Flattening the
+    // relief for a tarn also points every normal at the camera, so on the
+    // river's own fresnel and specular gain a pond blows out to white.
+    fresnel *= 1.0 - still * 0.6;
     vec3 color = mix(uDeep, uShallow, fresnel);
 
     float ndh = clamp(dot(nrm, halfVec), 0.0, 1.0);
@@ -443,7 +499,7 @@ export const waterFragmentShader = /* glsl */ `
     // water twinkle instead of flow.
     float sheen = pow(ndh, 12.0);
     float sparkle = pow(ndh, 90.0) * rippleFade;
-    color += uSheen * (sheen * 0.3 + sparkle * 0.32);
+    color += uSheen * (sheen * 0.3 + sparkle * 0.32) * (1.0 - still * 0.72);
 
     // Transverse crests, stretched across the channel and compressed along it,
     // marching upstream toward the camera. This is the term that actually reads
@@ -451,11 +507,11 @@ export const waterFragmentShader = /* glsl */ `
     // reshuffles.
     float crest = valueNoise(vec2(p.x * 2.2, p.y * 0.5 - uTime * 1.9));
     crest = crest * 0.65 + valueNoise(vec2(p.x * 4.5, p.y * 1.1 - uTime * 2.6)) * 0.35;
-    color += uSheen * smoothstep(0.58, 0.94, crest) * 0.22 * rippleFade;
+    color += uSheen * smoothstep(0.58, 0.94, crest) * 0.22 * rippleFade * (1.0 - still);
 
     // Broken water on the chop: individual glints, tight enough to read as
     // separate points of light on separate wavelets.
-    color += uSheen * smoothstep(0.76, 0.98, fh) * 0.34 * chopFade;
+    color += uSheen * smoothstep(0.76, 0.98, fh) * 0.34 * chopFade * (1.0 - still * 0.9);
 
     color = mix(color, uHaze, pow(smoothstep(60.0, 900.0, dist), 0.8));
 
@@ -720,6 +776,66 @@ export const grassFragmentShader = /* glsl */ `
 
     // Barely present outside the light: unlit grass should read as texture on
     // the silhouette, not as a field of grey blades.
+    vec3 unlit = color * 0.07;
+    gl_FragColor = vec4(toSRGB(mix(unlit, color, revealAt(gl_FragCoord.xy))), 1.0);
+  }
+`;
+
+/**
+ * Trail markers: a post and a small board, drawn by the same key as everything
+ * else so they are only legible inside the spotlight. Deliberately unlettered —
+ * at this camera height a board is a few pixels tall, and the two painted
+ * blazes read as a marker where text would only read as noise.
+ */
+export const signVertexShader = /* glsl */ `
+  varying vec3 vWorld;
+  varying vec3 vNrm;
+  varying vec2 vUvOut;
+
+  void main() {
+    vUvOut = uv;
+    vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
+    vWorld = world.xyz;
+    vNrm = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+export const signFragmentShader = /* glsl */ `
+  uniform vec3 uBody;
+  uniform vec3 uMark;
+  uniform vec3 uHaze;
+  /** 0 on the posts, 1 on the boards, which are the only part that carries a blaze. */
+  uniform float uBlazed;
+
+  varying vec3 vWorld;
+  varying vec3 vNrm;
+  varying vec2 vUvOut;
+
+  ${encodeSRGB}
+  ${spotlightChunk}
+  ${noiseChunk}
+
+  void main() {
+    vec3 nrm = normalize(vNrm);
+    vec3 lightDir = normalize(vec3(0.28, 0.82, 0.5));
+    float dist = distance(vWorld, uCamPos);
+    float detailFade = 1.0 - smoothstep(50.0, 200.0, dist);
+
+    // Weathered timber: grain along the length, and never quite the same tone
+    // twice, sampled in world space so neighbouring markers differ.
+    float grain = valueNoise(vWorld.xz * 7.0 + vWorld.y * 4.0);
+    vec3 color = uBody * (0.78 + grain * 0.42 * detailFade);
+    color *= 0.34 + clamp(dot(nrm, lightDir), 0.0, 1.0) * 1.05;
+
+    // Two blazes across the board.
+    float blaze = step(0.30, vUvOut.y) * step(vUvOut.y, 0.44)
+                + step(0.56, vUvOut.y) * step(vUvOut.y, 0.70);
+    blaze *= step(0.12, vUvOut.x) * step(vUvOut.x, 0.88) * uBlazed;
+    color = mix(color, uMark, blaze * 0.75 * detailFade);
+
+    color = mix(color, uHaze, pow(smoothstep(70.0, 600.0, dist), 0.85));
+
     vec3 unlit = color * 0.07;
     gl_FragColor = vec4(toSRGB(mix(unlit, color, revealAt(gl_FragCoord.xy))), 1.0);
   }

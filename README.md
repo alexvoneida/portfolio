@@ -101,6 +101,31 @@ spotlight would leave an empty black frame.
   in world space the stars would slide across the sky over the traverse, which
   reads as the sky rotating rather than the camera moving under it.
 
+### Things to find
+
+Three features exist to reward taking the spotlight off the route. All of them
+are deliberately small and low-contrast — the point is to come across one, not
+to be shown it.
+
+- **Tarns.** Carved into `heightAt`, so the river quad fills them for free and
+  the foliage pass keeps off them without being told. Each is a long shallow
+  apron down to a shore just above the water line, then a bed below it. The
+  apron is the whole trick: the camera flies about fifty units above the water,
+  so its sightline into a tarn two hundred units out descends at only ten or so
+  degrees, and any bank steeper than that hides the surface behind itself. The
+  first six were dug into the shoulders, carved perfectly, and visible from
+  nowhere on the traverse. `stillness()` in the water shader damps the current,
+  the crests and the specular gain inside one, or a pond gets lit as though a
+  river ran through it.
+- **A footpath.** Closed-form in both `src/lib/terrain.ts` and `trailChunk`, and
+  the two have to agree: the CPU keeps foliage off the tread and the GPU draws
+  it, and a path with grass growing down the middle is not a path.
+- **Waymarks.** A post and a board sharing one set of instance matrices, walked
+  along the path rather than scattered over it — a marker ten units off the
+  trail is litter, and rejection sampling would spend most of its attempts
+  finding that out. Unlettered on purpose: a board is a few pixels tall from the
+  flight path, where text would only read as noise.
+
 `TERRAIN.depth` is deliberately longer than `TERRAIN.traverse`. If the mesh
 ended where the camera stops, the valley walls would be cut off mid-frame at the
 end of the scroll. Station chainage follows the traverse, since it measures
@@ -115,7 +140,7 @@ producing a full-viewport gradient every frame and handing it to the compositor;
 the terrain is already being shaded on the GPU, so the reveal costs one distance
 test per fragment.
 
-Five things here are easy to get wrong and were:
+Six things here are easy to get wrong and were:
 
 - **Colour space.** three applies its output encoding inside its own materials
   only. A raw `ShaderMaterial` writes straight into an sRGB drawing buffer while
@@ -127,6 +152,10 @@ Five things here are easy to get wrong and were:
 - **Uniform ownership.** The frame loop writes through a ref to the material's
   own `uniforms`, not through the memoized object passed as a prop. Only the
   material is guaranteed to be the instance bound to the compiled program.
+- **Placement that cannot be checked by eye.** Whether a carved feature is
+  visible from the flight path is a question about sightlines against terrain,
+  and a screenshot of somewhere it is not tells you nothing. `heightAt` is
+  plain TypeScript, so march the sightline in a script and assert on it.
 - **Fast Refresh does not recompile shaders.** R3F assigns a changed `fragmentShader` to the
   material but never sets `needsUpdate`, so the GPU keeps running the old program. Reload the
   page before judging any shader edit — an HMR update will happily show you the previous one.
