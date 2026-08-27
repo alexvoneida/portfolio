@@ -4,8 +4,10 @@ export const profile = {
   tagline:
     "Senior CS student at Colorado School of Mines. I build systems that stay fast when the data gets big.",
   location: "Golden, Colorado",
-  email: "alexvoneida@gmail.com",
-  phone: "719-210-3203",
+  // No email or phone here on purpose. This module is imported by client
+  // components, so anything in it ships in the JavaScript bundle and is
+  // readable by anyone — scrapers included — whether or not it is rendered.
+  // Contact goes through the form; the number lives in the résumé PDF only.
   github: "https://github.com/alexvoneida",
   linkedin: "https://www.linkedin.com/in/alex-voneida",
   resume: "/alex-voneida-resume.pdf",

@@ -1,3 +1,4 @@
+import ContactForm from "@/components/ContactForm";
 import MapBackdrop from "@/components/scene/MapBackdrop";
 import ProjectRegister from "@/components/ProjectRegister";
 import Reveal from "@/components/Reveal";
@@ -58,10 +59,10 @@ export default function Home() {
                 Read the résumé
               </a>
               <a
-                href={`mailto:${profile.email}`}
+                href="#contact"
                 className="liquid-glass rounded-full px-5 py-2.5 font-mono text-sm text-fg/80 transition-colors hover:text-fg"
               >
-                {profile.email}
+                Get in touch
               </a>
               <a
                 href={profile.github}
@@ -166,14 +167,9 @@ export default function Home() {
           <Reveal>
             <p className="text-lg leading-relaxed text-fg/85">
               I am looking for a new-grad software engineering role starting summer 2027, and
-              an internship before then. The fastest way to reach me is email.
+              an internship before then. Send me a note and I will reply.
             </p>
-            <a
-              href={`mailto:${profile.email}`}
-              className="mt-8 inline-block break-all border-b border-accent/40 pb-1 font-mono text-xl text-accent transition-colors hover:border-accent sm:text-2xl"
-            >
-              {profile.email}
-            </a>
+            <ContactForm />
             <div className="mt-10 flex flex-wrap gap-x-8 gap-y-3 font-mono text-sm">
               <a href={profile.github} className="text-mute transition-colors hover:text-fg">
                 github.com/alexvoneida

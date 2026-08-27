@@ -30,6 +30,9 @@ yarn-error.log*
 
 # env files
 .env*
+# ...but the template belongs in the repo: it is the only place that says
+# which variables the app needs.
+!.env.example
 
 # vercel
 .vercel

@@ -51,7 +51,6 @@ const personSchema = {
   "@type": "Person",
   name: profile.name,
   jobTitle: profile.title,
-  email: `mailto:${profile.email}`,
   url: siteUrl,
   sameAs: [profile.github, profile.linkedin],
   alumniOf: { "@type": "CollegeOrUniversity", name: "Colorado School of Mines" },

@@ -23,6 +23,23 @@ npm run lint
 | `src/components/scene/` | React Three Fiber scene, shaders, and the static fallback. |
 | `src/components/scene/sceneState.ts` | Per-frame camera and spotlight state, written once and read by every material. |
 
+### Contact
+
+`src/components/ContactForm.tsx` posts straight to Web3Forms from the browser.
+No address or phone number appears anywhere on the site, in the markup, or in
+the JSON-LD, and neither is in `src/content/portfolio.ts` — that module is
+imported by client components, so anything in it ships in the JavaScript bundle
+and is readable by a scraper whether or not it is ever rendered.
+
+Set `NEXT_PUBLIC_WEB3FORMS_KEY` (see `.env.example`) to the key Web3Forms gives
+you for your inbox. `NEXT_PUBLIC_` is correct: the key has to reach the browser,
+and it is not a secret — it only grants permission to send a message to the one
+inbox it is bound to. Unset, the form validates and then tells the visitor it is
+not configured, rather than swallowing what they typed.
+
+Spam is handled by a `botcheck` honeypot positioned off-screen rather than
+`display: none`, which is a known tell, plus Web3Forms' own filtering.
+
 ### The single source of truth
 
 `sections` in `portfolio.ts` carries a `t` for each section — its position along
