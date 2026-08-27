@@ -585,12 +585,30 @@ export const rangeFragmentShader = /* glsl */ `
   ${encodeSRGB}
   ${noiseChunk}
 
-  /** Sum of octaves along the ridge line, biased upward into peaks. */
+  /**
+   * Folded octaves along the ridge line. Each sample is reflected about its
+   * midpoint — a triangle wave of the noise — which puts a hard crease at every
+   * maximum. A plain sum of value noise has smooth maxima by construction, so
+   * it can only ever produce rounded shoulders; the fold is what makes a
+   * skyline read as crests rather than as hills.
+   *
+   * Deliberately not squared, unlike the terrain's ridged multifractal: squaring
+   * biases the sum upward but rounds the very corners this exists to keep.
+   * uRough deepens the saddles instead, most on the nearest range.
+   */
   float ridgeLine(float x) {
-    float s = valueNoise(vec2(x * 3.0 + uSeed, uSeed)) * 0.55
-            + valueNoise(vec2(x * 7.0 + uSeed, uSeed * 1.7)) * 0.28
-            + valueNoise(vec2(x * 17.0 + uSeed, uSeed * 2.3)) * 0.17;
-    return pow(s, 1.0 + uRough);
+    float sum = 0.0;
+    float norm = 0.0;
+    float amp = 1.0;
+    float freq = 3.0;
+    for (int i = 0; i < 4; i++) {
+      float n = valueNoise(vec2(x * freq + uSeed, uSeed * (1.0 + float(i) * 0.7)));
+      sum += (1.0 - abs(n * 2.0 - 1.0)) * amp;
+      norm += amp;
+      amp *= 0.52;
+      freq *= 2.17;
+    }
+    return pow(sum / norm, 1.0 + uRough * 1.6);
   }
 
   void main() {
