@@ -28,25 +28,31 @@ export const spotlightChunk = /* glsl */ `
   uniform float uBaseLight;
 
   /**
-   * Feathered falloff: solid to 40% of the radius, then four stops out to
-   * nothing, which gives a soft edge without the banding a single smoothstep
-   * produces at this size. Branchless so it stays well-defined wherever it is
-   * called from.
+   * Wide solid core with a short falloff, so the pool of light has a definite
+   * edge rather than dissolving across half its own radius. Branchless, so it
+   * stays well-defined wherever it is called from.
    */
   float spotlightFalloff(float d) {
-    float a = mix(1.00, 0.75, clamp((d - 0.40) / 0.20, 0.0, 1.0));
-    float b = mix(a, 0.40, clamp((d - 0.60) / 0.15, 0.0, 1.0));
-    float c = mix(b, 0.12, clamp((d - 0.75) / 0.13, 0.0, 1.0));
-    return mix(c, 0.0, clamp((d - 0.88) / 0.12, 0.0, 1.0));
+    float a = mix(1.00, 0.86, clamp((d - 0.62) / 0.16, 0.0, 1.0));
+    float b = mix(a, 0.45, clamp((d - 0.78) / 0.10, 0.0, 1.0));
+    float c = mix(b, 0.14, clamp((d - 0.88) / 0.07, 0.0, 1.0));
+    return mix(c, 0.0, clamp((d - 0.95) / 0.05, 0.0, 1.0));
+  }
+
+  float revealAt(vec2 fragCoord) {
+    float d = distance(fragCoord, uCursor) / uRadius;
+    return max(uBaseLight, pow(spotlightFalloff(d), 1.15) * uReveal * 0.94);
   }
 
   /**
-   * The gamma pulls the mid-falloff down so lit ground dissolves into the black
-   * instead of ending on a visible arc.
+   * A thin bright band at the boundary. Reads as the wall of the glass the
+   * landscape is being viewed through, and it is what makes the edge legible
+   * as an edge rather than as the end of the lighting.
    */
-  float revealAt(vec2 fragCoord) {
+  float rimAt(vec2 fragCoord) {
     float d = distance(fragCoord, uCursor) / uRadius;
-    return max(uBaseLight, pow(spotlightFalloff(d), 1.7) * uReveal * 0.94);
+    float band = 1.0 - clamp(abs(d - 0.90) / 0.05, 0.0, 1.0);
+    return band * band * uReveal;
   }
 `;
 
@@ -143,13 +149,23 @@ export const terrainFragmentShader = /* glsl */ `
     vec2 fineP = vWorld.xz * 0.95;
     float mottle = fbm(coarse);
     float fine = fbm(fineP);
+    // A third scale, an order finer again. Only ever visible inside the light,
+    // which is exactly where the eye has time to look for it.
+    float grain = valueNoise(vWorld.xz * 5.5) * 0.6 + valueNoise(vWorld.xz * 13.0) * 0.4;
 
     // Micro-relief. Perturbing the normal by the gradient of the fine noise is
     // what separates "a green surface" from "clumps of moss catching light".
     float e = 0.6;
     float gx = fbm(fineP + vec2(e, 0.0));
     float gz = fbm(fineP + vec2(0.0, e));
-    vec3 bumped = normalize(nrm + vec3(fine - gx, 0.0, fine - gz) * 2.4 * detailFade);
+    // Two scales of micro-relief: clumps from the fine octave, and a sharper
+    // grain on top so the clumps themselves have surface.
+    float grainFade = 1.0 - smoothstep(60.0, 260.0, dist);
+    float ggx = valueNoise(vWorld.xz * 5.5 + vec2(0.14, 0.0));
+    float ggz = valueNoise(vWorld.xz * 5.5 + vec2(0.0, 0.14));
+    vec3 relief = vec3(fine - gx, 0.0, fine - gz) * 2.4 * detailFade
+                + vec3(grain - ggx, 0.0, grain - ggz) * 1.5 * grainFade;
+    vec3 bumped = normalize(nrm + relief);
 
     float bare = smoothstep(0.80, 0.34, bumped.y);
 
@@ -159,6 +175,8 @@ export const terrainFragmentShader = /* glsl */ `
     vec3 moss = mix(uMossDeep, uMossMid, smoothstep(0.38, 0.86, mottle));
     moss = mix(moss, uMossLit, smoothstep(0.68, 0.98, mottle) * 0.85);
     moss = mix(moss, uMossHi, smoothstep(0.74, 0.99, fine) * 0.5 * detailFade);
+    // Individual bright tips, sparse enough to read as separate specks.
+    moss = mix(moss, uMossHi, smoothstep(0.80, 0.99, grain) * 0.4 * grainFade);
     // Bare soil in the hollows, so the revealed ground is not uniformly green.
     moss = mix(uSoil, moss, smoothstep(0.12, 0.44, mottle));
 
@@ -204,6 +222,9 @@ export const terrainFragmentShader = /* glsl */ `
     living = mix(living, living * 0.42, linework * 0.6);
 
     vec3 color = mix(unlit, living, revealAt(gl_FragCoord.xy));
+    // Pale rather than green: the rim should read as the wall of the glass, not
+    // as more moss.
+    color += uLine * rimAt(gl_FragCoord.xy) * 0.11;
     fragColor = vec4(toSRGB(color), 1.0);
   }
 `;
@@ -294,21 +315,37 @@ export const waterFragmentShader = /* glsl */ `
   ${spotlightChunk}
   ${noiseChunk}
 
-  /** Two noise fields drifting against each other, so the surface never repeats. */
+  /**
+   * Three scales carried downstream at different rates. The river runs along
+   * -z, so the dominant drift is in z; the slower cross-drift keeps the pattern
+   * from reading as a texture on a conveyor belt.
+   */
   float ripple(vec2 p) {
-    return valueNoise(p + vec2(uTime * 0.07, uTime * 0.04)) * 0.6
-         + valueNoise(p * 2.7 - vec2(uTime * 0.11, uTime * 0.05)) * 0.4;
+    float flow = uTime * 0.85;
+    return valueNoise(p + vec2(uTime * 0.06, flow * 0.55)) * 0.5
+         + valueNoise(p * 2.3 + vec2(-uTime * 0.10, flow * 0.85)) * 0.32
+         + valueNoise(p * 5.7 + vec2(uTime * 0.16, flow * 1.30)) * 0.18;
   }
 
   void main() {
     vec2 p = vWorld.xz * 0.5;
+    float dist = distance(vWorld, uCamPos);
+
+    // Flatten the surface with distance. A pixel of far water covers many
+    // ripples, and a full-strength normal there aliases into static rather than
+    // resolving into waves.
+    float rippleFade = 1.0 - smoothstep(90.0, 420.0, dist);
 
     // Gradient of the ripple field becomes the surface normal. Sampling by hand
     // rather than with derivatives keeps the wave scale independent of how many
     // pixels the water happens to cover.
-    float e = 0.35;
+    float e = 0.3;
     float h = ripple(p);
-    vec3 nrm = normalize(vec3(h - ripple(p + vec2(e, 0.0)), 0.35, h - ripple(p + vec2(0.0, e))));
+    float dx = (h - ripple(p + vec2(e, 0.0))) * rippleFade;
+    float dz = (h - ripple(p + vec2(0.0, e))) * rippleFade;
+    // The low y term is what gives the surface visible relief: near 1.0 the
+    // normals barely tilt and the river reads as flat glass.
+    vec3 nrm = normalize(vec3(dx * 2.0, 0.3, dz * 2.0));
 
     vec3 view = normalize(uCamPos - vWorld);
     vec3 lightDir = normalize(vec3(0.28, 0.82, 0.5));
@@ -318,33 +355,103 @@ export const waterFragmentShader = /* glsl */ `
     float fresnel = pow(1.0 - clamp(dot(nrm, view), 0.0, 1.0), 3.0);
     vec3 color = mix(uDeep, uShallow, fresnel);
 
-    float glint = pow(clamp(dot(nrm, halfVec), 0.0, 1.0), 90.0);
-    color += uSheen * glint * 0.9;
+    float ndh = clamp(dot(nrm, halfVec), 0.0, 1.0);
+    // Two lobes: a broad sheen for the body of the river and a tighter one for
+    // the travelling highlights on the wave crests.
+    float sheen = pow(ndh, 12.0);
+    float sparkle = pow(ndh, 90.0) * rippleFade;
+    color += uSheen * (sheen * 0.3 + sparkle * 0.55);
 
-    float dist = distance(vWorld, uCamPos);
     color = mix(color, uHaze, pow(smoothstep(60.0, 900.0, dist), 0.8));
 
-    // Unlit water keeps only its specular, which is what a river looks like at
-    // night: black, with the surface picked out in moving highlights.
-    vec3 unlit = uDeep * 0.35 + uSheen * glint * 0.5;
+    // Unlit water keeps a trace of its highlights, which is what a river looks
+    // like at night: black, with the surface picked out in moving glints.
+    vec3 unlit = uDeep * 0.3 + uSheen * sparkle * 0.22;
 
-    gl_FragColor = vec4(toSRGB(mix(unlit, color, revealAt(gl_FragCoord.xy))), 1.0);
+    vec3 lit = mix(unlit, color, revealAt(gl_FragCoord.xy));
+    lit += uSheen * rimAt(gl_FragCoord.xy) * 0.2;
+    gl_FragColor = vec4(toSRGB(lit), 1.0);
   }
 `;
 
-/** Flat vertical gradient standing behind everything, so the sky is not a void. */
+/**
+ * The night sky: a horizon gradient, three star layers and a banded milky way.
+ * All procedural, so it costs one quad and no texture download.
+ */
 export const skyFragmentShader = /* glsl */ `
   uniform vec3 uHorizon;
   uniform vec3 uZenith;
+  uniform vec3 uStar;
+  uniform vec3 uMilkyCore;
+  uniform vec3 uMilkyEdge;
+  uniform float uAspect;
 
   varying vec2 vUv;
 
   ${encodeSRGB}
+  ${noiseChunk}
+
+  float fbmSky(vec2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i < 5; i++) {
+      sum += amp * valueNoise(p);
+      p *= 2.11;
+      amp *= 0.5;
+    }
+    return sum;
+  }
+
+  /**
+   * One star per grid cell, most cells empty. Cells are kept square by the
+   * aspect term, or stars stretch into dashes on a wide quad.
+   */
+  float starLayer(vec2 uv, float density, float threshold, float size) {
+    vec2 grid = uv * vec2(density * uAspect, density);
+    vec2 cell = floor(grid);
+    vec2 f = fract(grid);
+
+    float occupancy = hash21(cell);
+    float present = step(threshold, occupancy);
+
+    vec2 at = vec2(hash21(cell + 11.3), hash21(cell + 47.7));
+    float d = length(f - at);
+    float point = pow(clamp(1.0 - d / size, 0.0, 1.0), 9.0);
+
+    // Brightness varies per star, and the very brightest are rare.
+    float magnitude = pow(hash21(cell + 3.1), 2.2);
+    return point * present * (0.25 + magnitude * 1.35);
+  }
 
   void main() {
-    // Steep falloff: the glow belongs in a band just above the ridges, not
-    // spread evenly over four thousand units of sky.
-    gl_FragColor = vec4(toSRGB(mix(uHorizon, uZenith, pow(vUv.y, 0.3))), 1.0);
+    vec3 color = mix(uHorizon, uZenith, pow(vUv.y, 0.3));
+
+    // Fade everything out toward the horizon, where haze would drown it.
+    float altitude = smoothstep(0.34, 0.58, vUv.y);
+
+    // A diagonal band. The offset keeps it clear of the horizon at the left
+    // edge, where the ridges are tallest.
+    float across = (vUv.y - 0.60 - (vUv.x - 0.5) * 0.30) / 0.17;
+    float band = exp(-across * across);
+
+    vec2 cloudUv = vec2(vUv.x * uAspect, vUv.y) * 7.0;
+    float clouds = fbmSky(cloudUv);
+    // Dust lanes: a second, finer field subtracted from the band so it breaks
+    // into strands instead of reading as an airbrushed smear.
+    float lanes = smoothstep(0.35, 0.72, fbmSky(cloudUv * 2.3 + 19.0));
+
+    float milky = band * (0.35 + clouds * 0.95) * (0.45 + lanes * 0.75);
+    color += mix(uMilkyEdge, uMilkyCore, clamp(band * 1.25, 0.0, 1.0)) * milky * altitude * 0.38;
+
+    // Dense faint field, a mid layer, and a few bright foreground stars. The
+    // milky way carries extra stars, which is most of why it reads as depth.
+    float stars = starLayer(vUv, 210.0, 0.93, 0.16) * (0.55 + milky * 1.5);
+    stars += starLayer(vUv, 96.0, 0.965, 0.20);
+    stars += starLayer(vUv, 38.0, 0.986, 0.26) * 1.5;
+
+    color += uStar * stars * altitude * 0.8;
+
+    gl_FragColor = vec4(toSRGB(color), 1.0);
   }
 `;
 

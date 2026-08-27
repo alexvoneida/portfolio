@@ -2,11 +2,18 @@ import { createNoise2D } from "simplex-noise";
 
 export const TERRAIN = {
   width: 900,
-  depth: 2000,
+  /**
+   * Mesh extent. Deliberately longer than the traverse: if the geometry ended
+   * where the camera stops, the valley walls would be cut off mid-frame at the
+   * end of the scroll and the ranges would sit in the gap.
+   */
+  depth: 2900,
+  /** Distance the camera actually covers, from t=0 to t=1. */
+  traverse: 1680,
   /** World z of the near edge; the far edge is `zNear - depth`. */
   zNear: 200,
   segmentsX: 150,
-  segmentsZ: 300,
+  segmentsZ: 430,
   /** Camera height above the valley floor. */
   flightHeight: 40,
   /** Half-width of the flat corridor the camera flies down. */
@@ -96,7 +103,7 @@ export function slopeAt(x: number, z: number, step = 4) {
 
 /** World-space z for a given progress along the flight, 0 at the near edge. */
 export function zAtProgress(t: number) {
-  return TERRAIN.zNear - 120 - t * (TERRAIN.depth - 320);
+  return TERRAIN.zNear - 120 - t * TERRAIN.traverse;
 }
 
 export function flightPointAt(t: number): [number, number, number] {

@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
 import { TERRAIN } from "@/lib/terrain";
+import { sceneState } from "./sceneState";
 import { rangeFragmentShader, rangeVertexShader, skyFragmentShader } from "./shaders";
 
 /**
@@ -60,20 +62,38 @@ function Range({ layer }: { layer: (typeof LAYERS)[number] }) {
   );
 }
 
+const SKY_WIDTH = 20000;
+const SKY_HEIGHT = 12000;
+/** Kept well beyond the outermost range so it never sorts in front of one. */
+const SKY_DISTANCE = 6000;
+
 function Sky() {
+  const mesh = useRef<THREE.Mesh>(null);
+
   const uniforms = useMemo(
     () => ({
       uHorizon: { value: new THREE.Color("#10160e") },
-      uZenith: { value: new THREE.Color("#050505") },
+      uZenith: { value: new THREE.Color("#04040a") },
+      uStar: { value: new THREE.Color("#dfe8ff") },
+      uMilkyCore: { value: new THREE.Color("#8f9ecb") },
+      uMilkyEdge: { value: new THREE.Color("#3d4468") },
+      uAspect: { value: SKY_WIDTH / SKY_HEIGHT },
     }),
     [],
   );
 
-  // Positioned so its lower edge sits just under the horizon line, which puts
-  // the whole gradient in the part of the sky the camera can actually see.
+  // Rides with the camera. Anchored in world space the stars would slide across
+  // the sky over the traverse, which reads as the sky rotating rather than as
+  // the camera moving under it.
+  useFrame(() => {
+    if (!mesh.current) return;
+    mesh.current.position.x = sceneState.cameraPosition.x;
+    mesh.current.position.z = sceneState.cameraPosition.z - SKY_DISTANCE;
+  });
+
   return (
-    <mesh position={[0, 2040, FAR_EDGE - 3000]} frustumCulled={false}>
-      <planeGeometry args={[14000, 4200]} />
+    <mesh ref={mesh} position={[0, 2000, -SKY_DISTANCE]} frustumCulled={false}>
+      <planeGeometry args={[SKY_WIDTH, SKY_HEIGHT]} />
       <shaderMaterial
         uniforms={uniforms}
         vertexShader={rangeVertexShader}

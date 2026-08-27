@@ -91,6 +91,15 @@ spotlight would leave an empty black frame.
   the fragment stage — the heightmap simply stops, and without them the traverse
   ends looking into empty sky. Each range is lighter than the sky behind it and
   lighter than the one in front, which is the whole of aerial perspective.
+- **Night sky.** A horizon gradient, three procedural star layers and a banded
+  milky way with dust lanes, all on one quad. It rides with the camera: anchored
+  in world space the stars would slide across the sky over the traverse, which
+  reads as the sky rotating rather than the camera moving under it.
+
+`TERRAIN.depth` is deliberately longer than `TERRAIN.traverse`. If the mesh
+ended where the camera stops, the valley walls would be cut off mid-frame at the
+end of the scroll. Station chainage follows the traverse, since it measures
+distance travelled rather than the extent of the mesh that happens to carry it.
 
 Every one of these reads the same `sceneState`, so the spotlight lights the
 terrain, the water and the foliage as a single pool of light rather than four

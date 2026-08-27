@@ -6,7 +6,9 @@ import { TERRAIN, flightPointAt, heightAt } from "./terrain";
  * station and its position in the flythrough can never disagree.
  */
 export function stationLabel(t: number) {
-  const distance = t * TERRAIN.depth;
+  // Chainage measures distance travelled, so it follows the traverse rather
+  // than the extent of the mesh the traverse happens to sit on.
+  const distance = t * TERRAIN.traverse;
   const chains = Math.floor(distance / 100);
   const offset = Math.round(distance % 100);
   return `${chains}+${String(offset).padStart(2, "0")}`;

@@ -72,7 +72,9 @@ function scatter(
 
   while (placed < count && attempts < limit) {
     attempts++;
-    const t = random();
+    // Overshoots the traverse at both ends: the mesh continues past where the
+    // camera stops, and bare ground there would give the ending away.
+    const t = -0.06 + random() * 1.32;
     const [pathX, , z] = flightPointAt(t);
     const x = pathX + (random() - 0.5) * TERRAIN.width * 0.55;
     const height = heightAt(x, z);
@@ -132,7 +134,7 @@ export function Grass({
   const placement = useMemo(
     () =>
       scatter(
-        quality === "low" ? 4500 : 12000,
+        quality === "low" ? 6000 : 22000,
         0x9c455,
         // Off the cliffs and out of the river; a tuft standing in the water or
         // jutting sideways off a rock face reads as a bug.
@@ -207,7 +209,7 @@ export function Trees({
   const placement = useMemo(
     () =>
       scatter(
-        quality === "low" ? 600 : 1800,
+        quality === "low" ? 800 : 2400,
         0x7ee5,
         // A tree line: above the valley floor, below the bare rock, and off the
         // steepest faces.
