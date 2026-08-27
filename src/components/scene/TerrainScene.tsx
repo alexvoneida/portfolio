@@ -317,6 +317,7 @@ function SceneDriver() {
     // pointer arrives in CSS pixels from the top-left.
     sceneState.cursor.set(cursor.current.x * dpr, (size.height - cursor.current.y) * dpr);
     sceneState.radius = SPOTLIGHT_RADIUS * dpr;
+    sceneState.viewport.set(size.width * dpr, size.height * dpr);
 
     // Deliberately unclamped: the path is analytic, so looking past t=1 keeps a
     // valid heading at the very end instead of collapsing onto the camera.
@@ -369,6 +370,18 @@ export default function TerrainScene({ quality }: { quality: SceneQuality }) {
         tip={PALETTE.grassTip}
         haze={PALETTE.haze}
       />
+      {/* Desktop only: the placement pass is the expensive part of mounting the
+          scene, and a phone gets a wider base light rather than a spotlight to
+          make it worth paying for. */}
+      {quality === "high" && (
+        <Grass
+          detail
+          quality={quality}
+          base={PALETTE.grassBase}
+          tip={PALETTE.grassTip}
+          haze={PALETTE.haze}
+        />
+      )}
       <Stakes />
       <Motes quality={quality} />
     </Canvas>

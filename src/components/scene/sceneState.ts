@@ -21,6 +21,9 @@ const canHover =
 export const sceneState = {
   cameraPosition: new THREE.Vector3(),
   cursor: new THREE.Vector2(),
+  /** Drawing-buffer size in device pixels, so vertex shaders can place a point
+   *  in the same coordinates gl_FragCoord uses. */
+  viewport: new THREE.Vector2(1, 1),
   radius: SPOTLIGHT_RADIUS,
   reveal: 0,
   /**
@@ -40,6 +43,7 @@ export type SpotlightUniforms = {
   uRadius: { value: number };
   uReveal: { value: number };
   uBaseLight: { value: number };
+  uViewport: { value: THREE.Vector2 };
 };
 
 export function spotlightUniforms(): SpotlightUniforms {
@@ -49,6 +53,7 @@ export function spotlightUniforms(): SpotlightUniforms {
     uRadius: { value: SPOTLIGHT_RADIUS },
     uReveal: { value: 0 },
     uBaseLight: { value: sceneState.baseLight },
+    uViewport: { value: new THREE.Vector2(1, 1) },
   };
 }
 
@@ -59,4 +64,5 @@ export function syncSpotlight(uniforms: SpotlightUniforms) {
   uniforms.uRadius.value = sceneState.radius;
   uniforms.uReveal.value = sceneState.reveal;
   uniforms.uBaseLight.value = sceneState.baseLight;
+  uniforms.uViewport.value.copy(sceneState.viewport);
 }

@@ -26,6 +26,7 @@ export const spotlightChunk = /* glsl */ `
   uniform float uRadius;
   uniform float uReveal;
   uniform float uBaseLight;
+  uniform vec2 uViewport;
 
   /**
    * Wide solid core with a short falloff, so the pool of light has a definite
@@ -42,6 +43,25 @@ export const spotlightChunk = /* glsl */ `
   float revealAt(vec2 fragCoord) {
     float d = distance(fragCoord, uCursor) / uRadius;
     return max(uBaseLight, pow(spotlightFalloff(d), 1.15) * uReveal * 0.94);
+  }
+
+  /**
+   * The spotlight alone, with no ambient floor under it. This is the mask for
+   * detail that exists only inside the light — using revealAt() for that would
+   * leak the extra detail across the whole valley at the base light level.
+   */
+  float spotAt(vec2 fragCoord) {
+    return spotlightFalloff(distance(fragCoord, uCursor) / uRadius) * uReveal;
+  }
+
+  /**
+   * The same amount asked from a vertex shader, where there is no fragCoord.
+   * Points behind the camera return 0: their clip w is negative and the
+   * perspective divide would otherwise fold them back into the frame.
+   */
+  float spotAtClip(vec4 clip) {
+    vec2 screen = (clip.xy / max(abs(clip.w), 1e-4) * 0.5 + 0.5) * uViewport;
+    return spotAt(screen) * step(1e-4, clip.w);
   }
 
   /**
@@ -145,6 +165,9 @@ export const terrainFragmentShader = /* glsl */ `
     vec3 nrm = normalize(vNrm);
     float dist = distance(vWorld, uCamPos);
     float depth = smoothstep(60.0, 900.0, dist);
+    // How much of the light this fragment is standing in, with no ambient floor.
+    // Everything gated on this exists only inside the pool.
+    float spot = spotAt(gl_FragCoord.xy);
 
     // ---- Unlit layer: what the valley looks like outside the spotlight ----
     // Nearly black, shaped only by a sky term and by haze. The reference frame
@@ -168,6 +191,14 @@ export const terrainFragmentShader = /* glsl */ `
     // A third scale, an order finer again. Only ever visible inside the light,
     // which is exactly where the eye has time to look for it.
     float grain = valueNoise(vWorld.xz * 5.5) * 0.6 + valueNoise(vWorld.xz * 13.0) * 0.4;
+    // A fourth scale, finer again, and paid for only where the light is: at
+    // this frequency it would alias into static across the rest of the frame,
+    // and nobody would be looking at it there anyway.
+    // Held close as well as inside the light: at this frequency the field
+    // crosses one cycle per pixel somewhere past a hundred units out, and
+    // beyond that it aliases into salt and pepper instead of resolving.
+    float microFade = spot * (1.0 - smoothstep(30.0, 130.0, dist));
+    float micro = valueNoise(vWorld.xz * 10.0) * 0.6 + valueNoise(vWorld.xz * 24.0) * 0.4;
 
     // Micro-relief. Perturbing the normal by the gradient of the fine noise is
     // what separates "a green surface" from "clumps of moss catching light".
@@ -179,8 +210,11 @@ export const terrainFragmentShader = /* glsl */ `
     float grainFade = 1.0 - smoothstep(60.0, 260.0, dist);
     float ggx = valueNoise(vWorld.xz * 5.5 + vec2(0.14, 0.0));
     float ggz = valueNoise(vWorld.xz * 5.5 + vec2(0.0, 0.14));
+    float mgx = valueNoise(vWorld.xz * 10.0 + vec2(0.08, 0.0));
+    float mgz = valueNoise(vWorld.xz * 10.0 + vec2(0.0, 0.08));
     vec3 relief = vec3(fine - gx, 0.0, fine - gz) * 2.4 * detailFade
-                + vec3(grain - ggx, 0.0, grain - ggz) * 1.5 * grainFade;
+                + vec3(grain - ggx, 0.0, grain - ggz) * 1.5 * grainFade
+                + vec3(micro - mgx, 0.0, micro - mgz) * 1.4 * microFade;
     vec3 bumped = normalize(nrm + relief);
 
     float bare = smoothstep(0.80, 0.34, bumped.y);
@@ -195,6 +229,10 @@ export const terrainFragmentShader = /* glsl */ `
     moss = mix(moss, uMossHi, smoothstep(0.80, 0.99, grain) * 0.4 * grainFade);
     // Bare soil in the hollows, so the revealed ground is not uniformly green.
     moss = mix(uSoil, moss, smoothstep(0.12, 0.44, mottle));
+    // Inside the light the clumps break into individual heads: bright tips on
+    // the micro scale, and grit showing between them.
+    moss = mix(moss, uMossHi, smoothstep(0.72, 0.97, micro) * 0.55 * microFade);
+    moss = mix(moss, uSoil, smoothstep(0.30, 0.02, micro) * 0.35 * microFade);
 
     vec3 rock = mix(uRockDark, uRockLit, smoothstep(0.32, 0.86, mottle));
     vec3 living = mix(moss, rock, bare);
@@ -207,8 +245,13 @@ export const terrainFragmentShader = /* glsl */ `
     // it reads as photographed rather than modelled.
     vec3 view = normalize(uCamPos - vWorld);
     vec3 halfVec = normalize(lightDir + view);
-    float sheen = pow(clamp(dot(bumped, halfVec), 0.0, 1.0), 42.0) * (1.0 - bare) * detailFade;
+    float ndh = clamp(dot(bumped, halfVec), 0.0, 1.0);
+    float sheen = pow(ndh, 42.0) * (1.0 - bare) * detailFade;
     living += vec3(0.82, 1.0, 0.70) * sheen * 0.4;
+    // A second, much tighter lobe riding the micro-relief. Only inside the
+    // light, where the normals are detailed enough for it to land on
+    // individual clump heads instead of scintillating over the whole slope.
+    living += vec3(0.88, 1.0, 0.78) * pow(ndh, 160.0) * (1.0 - bare) * microFade * 0.3;
 
     living = mix(living, uHaze, pow(depth, 0.9) * 0.88);
 
@@ -347,9 +390,22 @@ export const waterFragmentShader = /* glsl */ `
          + valueNoise(p * 5.7 + vec2(uTime * 0.16, -flow * 1.30)) * 0.18;
   }
 
+  /**
+   * A fourth and fifth scale, an order finer and running faster. Rendered only
+   * inside the spotlight: across the rest of the river these frequencies fall
+   * below a pixel and boil.
+   */
+  float chop(vec2 p) {
+    float flow = uTime * 3.4;
+    return valueNoise(p * 11.0 + vec2(uTime * 0.20, -flow)) * 0.6
+         + valueNoise(p * 23.0 + vec2(-uTime * 0.30, -flow * 1.5)) * 0.4;
+  }
+
   void main() {
     vec2 p = vWorld.xz * 0.5;
     float dist = distance(vWorld, uCamPos);
+    float spot = spotAt(gl_FragCoord.xy);
+    float chopFade = spot * (1.0 - smoothstep(40.0, 200.0, dist));
 
     // Flatten the surface with distance. A pixel of far water covers many
     // ripples, and a full-strength normal there aliases into static rather than
@@ -363,6 +419,11 @@ export const waterFragmentShader = /* glsl */ `
     float h = ripple(p);
     float dx = (h - ripple(p + vec2(e, 0.0))) * rippleFade;
     float dz = (h - ripple(p + vec2(0.0, e))) * rippleFade;
+
+    float fe = 0.05;
+    float fh = chop(p);
+    dx += (fh - chop(p + vec2(fe, 0.0))) * chopFade * 1.6;
+    dz += (fh - chop(p + vec2(0.0, fe))) * chopFade * 1.6;
     // The low y term is what gives the surface visible relief: near 1.0 the
     // normals barely tilt and the river reads as flat glass.
     vec3 nrm = normalize(vec3(dx * 2.0, 0.3, dz * 2.0));
@@ -391,6 +452,10 @@ export const waterFragmentShader = /* glsl */ `
     float crest = valueNoise(vec2(p.x * 2.2, p.y * 0.5 - uTime * 1.9));
     crest = crest * 0.65 + valueNoise(vec2(p.x * 4.5, p.y * 1.1 - uTime * 2.6)) * 0.35;
     color += uSheen * smoothstep(0.58, 0.94, crest) * 0.22 * rippleFade;
+
+    // Broken water on the chop: individual glints, tight enough to read as
+    // separate points of light on separate wavelets.
+    color += uSheen * smoothstep(0.76, 0.98, fh) * 0.34 * chopFade;
 
     color = mix(color, uHaze, pow(smoothstep(60.0, 900.0, dist), 0.8));
 
@@ -471,7 +536,7 @@ export const skyFragmentShader = /* glsl */ `
     float lanes = smoothstep(0.35, 0.72, fbmSky(cloudUv * 2.3 + 19.0));
 
     float milky = band * (0.35 + clouds * 0.95) * (0.45 + lanes * 0.75);
-    color += mix(uMilkyEdge, uMilkyCore, clamp(band * 1.25, 0.0, 1.0)) * milky * altitude * 0.38;
+    color += mix(uMilkyEdge, uMilkyCore, clamp(band * 1.25, 0.0, 1.0)) * milky * altitude * 0.24;
 
     // Dense faint field, a mid layer, and a few bright foreground stars. The
     // milky way carries extra stars, which is most of why it reads as depth.
@@ -537,9 +602,19 @@ export const rangeFragmentShader = /* glsl */ `
     float rock = valueNoise(faceUv) * 0.6 + valueNoise(faceUv * 2.6) * 0.4;
     color *= 1.0 + (rock - 0.5) * 0.5 * uDetail;
 
-    // Snow only on the taller peaks, and only near their crests.
-    float alpine = smoothstep(0.55, 0.92, ridge) * smoothstep(0.62, 0.95, toCrest);
-    color = mix(color, uSnow, alpine * smoothstep(0.42, 0.78, rock) * 0.55 * uDetail);
+    // A snow line at a fixed altitude, so only the peaks that actually rise
+    // above it are capped and the saddles between them stay bare. A term based
+    // on height-as-a-fraction-of-this-peak instead puts the same band on every
+    // summit regardless of how tall it is, which reads as paint.
+    float snowline = 0.58 + valueNoise(vec2(vUv.x * 9.0 + uSeed, 3.0)) * 0.09;
+    float capped = smoothstep(snowline, snowline + 0.12, vUv.y);
+    // Broken by its own coarse field, not by the rock noise: the rock term runs
+    // at 190 cycles across the quad, and snow keyed to it comes out as
+    // salt-and-pepper camouflage rather than as drifts. Wide smoothstep for the
+    // same reason — a tight one turns a smooth field back into speckle.
+    float drift = valueNoise(vec2(vUv.x * 13.0 + uSeed, vUv.y * 5.0));
+    float alpine = capped * smoothstep(0.28, 0.85, drift) * smoothstep(0.58, 0.90, toCrest);
+    color = mix(color, uSnow, alpine * 0.5 * uDetail);
 
     gl_FragColor = vec4(toSRGB(color), 1.0);
   }
@@ -552,6 +627,8 @@ export const rangeFragmentShader = /* glsl */ `
  */
 export const grassVertexShader = /* glsl */ `
   uniform float uTime;
+  /** 1 on the detail layer, whose clumps exist only inside the spotlight. */
+  uniform float uSpotOnly;
 
   attribute vec3 tint;
   attribute vec3 bladeCenter;
@@ -559,6 +636,8 @@ export const grassVertexShader = /* glsl */ `
   varying vec3 vWorld;
   varying vec3 vTint;
   varying float vHeightFactor;
+
+  ${spotlightChunk}
 
   void main() {
     vHeightFactor = uv.y;
@@ -573,6 +652,14 @@ export const grassVertexShader = /* glsl */ `
       position.y,
       bladeCenter.z + (position.z - bladeCenter.z) * taper
     );
+
+    // The detail layer grows in under the pool of light and collapses to a
+    // point outside it, so tens of thousands of extra clumps cost nothing but
+    // their vertex transform anywhere else in the frame. Measured at the clump
+    // origin rather than per vertex, or a tuft straddling the edge would shear.
+    vec4 originClip = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    float grown = mix(1.0, smoothstep(0.02, 0.5, spotAtClip(originClip)), uSpotOnly);
+    local *= grown;
 
     vec4 world = instanceMatrix * vec4(local, 1.0);
 
@@ -615,6 +702,8 @@ export const grassFragmentShader = /* glsl */ `
 
 /** Conifers on the valley walls, lit by the same key as the terrain. */
 export const treeVertexShader = /* glsl */ `
+  uniform float uTime;
+
   attribute vec3 tint;
 
   varying vec3 vWorld;
@@ -622,11 +711,32 @@ export const treeVertexShader = /* glsl */ `
   varying vec3 vTint;
   varying float vUpFactor;
 
+  ${spotlightChunk}
+
   void main() {
     vTint = tint;
     // 0 at the skirt, 1 at the leader. Cone uvs run bottom to top.
     vUpFactor = uv.y;
     vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
+
+    // Only the trees standing in the light move. A whole valley of swaying
+    // conifers at this distance reads as the mesh crawling; confined to the
+    // pool it reads as wind, and it is one more thing the spotlight has that
+    // the rest of the frame does not.
+    //
+    // Sampled once at the instance origin rather than per vertex, so a canopy
+    // straddling the edge of the pool bends as one tree instead of tearing
+    // down the middle.
+    vec4 originClip = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    float lit = spotAtClip(originClip);
+    // Two periods beating against each other so gusts arrive irregularly, and
+    // displacement scaling with the square of height so the trunk stays put.
+    float gust = sin(uTime * 0.85 + world.x * 0.05 + world.z * 0.04) * 0.62
+               + sin(uTime * 1.63 + world.x * 0.11) * 0.38;
+    float bend = vUpFactor * vUpFactor * lit;
+    world.x += gust * bend * 2.4;
+    world.z += cos(uTime * 0.71 + world.z * 0.06) * bend * 1.4;
+
     vWorld = world.xyz;
     vNrm = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
     gl_Position = projectionMatrix * viewMatrix * world;

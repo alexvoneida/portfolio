@@ -32,6 +32,22 @@ const BLADES = [
 ];
 
 /**
+ * Seven blades for the spotlight-only layer. Blades per clump are nearly free
+ * compared to clumps: the triangles are all collapsed to a point outside the
+ * pool anyway, and the placement pass — noise sampling on the main thread, and
+ * the actual cost of mounting the scene — runs once per clump either way.
+ */
+const DETAIL_BLADES = [
+  { angle: 0, offsetX: 0, offsetZ: 0, height: 1, lean: 0.05 },
+  { angle: 0.52, offsetX: 0.31, offsetZ: -0.11, height: 0.83, lean: -0.14 },
+  { angle: 1.12, offsetX: -0.17, offsetZ: 0.29, height: 0.91, lean: 0.17 },
+  { angle: 1.68, offsetX: 0.13, offsetZ: 0.27, height: 0.7, lean: -0.2 },
+  { angle: 2.24, offsetX: -0.33, offsetZ: -0.19, height: 0.88, lean: 0.12 },
+  { angle: 2.71, offsetX: 0.02, offsetZ: -0.35, height: 0.75, lean: -0.09 },
+  { angle: 0.86, offsetX: -0.28, offsetZ: -0.03, height: 0.66, lean: 0.22 },
+];
+
+/**
  * Three upright quads at different angles and slight offsets, tapered to a
  * point in the vertex shader so the blade silhouette needs no alpha texture.
  *
@@ -39,7 +55,7 @@ const BLADES = [
  * the same either way, but the placement pass — which is the expensive part,
  * being noise sampling on the main thread — only runs once per clump.
  */
-function makeTuftGeometry() {
+function makeTuftGeometry(blades: typeof BLADES) {
   const geometry = new THREE.BufferGeometry();
   const positions: number[] = [];
   const centers: number[] = [];
@@ -47,7 +63,7 @@ function makeTuftGeometry() {
   const indices: number[] = [];
   const half = 0.5;
 
-  BLADES.forEach((blade, index) => {
+  blades.forEach((blade, index) => {
     const sin = Math.sin(blade.angle);
     const cos = Math.cos(blade.angle);
     // Corners in blade-local space, then rotated about Y into the clump.
@@ -90,6 +106,8 @@ function makeTuftGeometry() {
 function scatter(
   count: number,
   seed: number,
+  /** Fraction of the mesh width the scatter spans, centred on the flight path. */
+  spread: number,
   accept: (x: number, z: number, height: number) => boolean,
   transform: (
     random: () => number,
@@ -116,7 +134,7 @@ function scatter(
     // camera stops, and bare ground there would give the ending away.
     const t = -0.06 + random() * 1.32;
     const [pathX, , z] = flightPointAt(t);
-    const x = pathX + (random() - 0.5) * TERRAIN.width * 0.55;
+    const x = pathX + (random() - 0.5) * TERRAIN.width * spread;
     const height = heightAt(x, z);
     if (!accept(x, z, height)) continue;
 
@@ -157,18 +175,26 @@ const scratchQuaternion = new THREE.Quaternion();
 const scratchScale = new THREE.Vector3();
 const upAxis = new THREE.Vector3(0, 1, 0);
 
+/**
+ * Ground cover. The `detail` layer is a second, denser scatter whose clumps are
+ * collapsed to a point by the vertex shader unless they are standing in the
+ * spotlight — the only way to make the light noticeably denser than the rest of
+ * the valley, since instances are placed once at mount and the pool moves.
+ */
 export function Grass({
   quality,
   base,
   tip,
   haze,
+  detail = false,
 }: {
   quality: SceneQuality;
   base: THREE.Color;
   tip: THREE.Color;
   haze: THREE.Color;
+  detail?: boolean;
 }) {
-  const geometry = useMemo(() => makeTuftGeometry(), []);
+  const geometry = useMemo(() => makeTuftGeometry(detail ? DETAIL_BLADES : BLADES), [detail]);
   const material = useRef<THREE.ShaderMaterial>(null);
 
   const placement = useMemo(
@@ -176,8 +202,12 @@ export function Grass({
       scatter(
         // Clumps, not blades: each carries three. Denser ground cover than the
         // previous flat count, for fewer placement samples.
-        quality === "low" ? 5200 : 18000,
-        0x9c455,
+        detail ? 34000 : quality === "low" ? 5200 : 18000,
+        detail ? 0x51e07 : 0x9c455,
+        // The detail layer is packed into the corridor the spotlight can
+        // actually reach. Spread across the full valley the same instances
+        // would mostly be spent on ground the pool never lands on.
+        detail ? 0.3 : 0.55,
         // Off the cliffs and out of the river; a tuft standing in the water or
         // jutting sideways off a rock face reads as a bug.
         (x, z, height) => height > WATER_LEVEL + 1.5 && slopeAt(x, z, height) < 0.55,
@@ -186,14 +216,16 @@ export function Grass({
           scratchQuaternion.setFromAxisAngle(upAxis, random() * Math.PI);
           // Small and dense. At this camera height taller blades stop reading as
           // ground cover and start reading as individual spikes.
-          const blade = 1.1 + random() * 1.5;
+          // Shorter on the detail layer: it fills in between the clumps that
+          // are always there rather than standing over them.
+          const blade = detail ? 0.8 + random() * 1.1 : 1.1 + random() * 1.5;
           scratchScale.set(0.5 + random() * 0.35, blade, 0.5 + random() * 0.35);
           matrix.compose(scratchPosition, scratchQuaternion, scratchScale);
           const variation = 0.6 + random() * 0.55;
           tint.set(variation, variation * (0.94 + random() * 0.14), variation * 0.8);
         },
       ),
-    [quality],
+    [quality, detail],
   );
 
   const mesh = useInstances(placement, geometry);
@@ -205,8 +237,9 @@ export function Grass({
       uTip: { value: tip },
       uHaze: { value: haze },
       uTime: { value: 0 },
+      uSpotOnly: { value: detail ? 1 : 0 },
     }),
-    [base, tip, haze],
+    [base, tip, haze, detail],
   );
 
   useEffect(() => () => geometry.dispose(), [geometry]);
@@ -257,6 +290,7 @@ export function Trees({
       scatter(
         quality === "low" ? 800 : 2400,
         0x7ee5,
+        0.55,
         // A tree line: above the valley floor, below the bare rock, and off the
         // steepest faces.
         (x, z, height) =>
@@ -284,6 +318,7 @@ export function Trees({
   const uniforms = useMemo(
     () => ({
       ...spotlightUniforms(),
+      uTime: { value: 0 },
       uCanopy: { value: canopy },
       uCanopyLit: { value: canopyLit },
       uFrost: { value: frost },
@@ -294,9 +329,11 @@ export function Trees({
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
-  useFrame(() => {
+  useFrame(({ clock }) => {
     const live = material.current?.uniforms;
-    if (live) syncSpotlight(live as unknown as SpotlightUniforms);
+    if (!live) return;
+    syncSpotlight(live as unknown as SpotlightUniforms);
+    live.uTime.value = clock.elapsedTime;
   });
 
   return (

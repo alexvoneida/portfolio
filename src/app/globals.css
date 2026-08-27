@@ -166,15 +166,19 @@
  * pseudo-element against itself — the standard trick for a border-only
  * gradient, since border-image cannot follow a border-radius.
  *
- * `--glass-tint` and `--glass-blur` let the fixed header opt into a heavier
- * treatment. At 1% alpha the glass is beautiful over static imagery but body
- * copy scrolling underneath reads straight through it.
+ * `--glass-tint` lets the fixed header opt into a heavier treatment. At 1%
+ * alpha the glass is beautiful over static imagery but body copy scrolling
+ * underneath reads straight through it.
  */
 @utility liquid-glass {
   background: var(--glass-tint, rgba(255, 255, 255, 0.01));
   background-blend-mode: luminosity;
-  backdrop-filter: blur(var(--glass-blur, 4px));
-  -webkit-backdrop-filter: blur(var(--glass-blur, 4px));
+  /* Do NOT hand-write a -webkit-backdrop-filter beside this. Tailwind's
+     Lightning CSS adds the prefix itself where the browser targets need it,
+     and given both it drops the property entirely — no error, no blur, and
+     nothing in the CSSOM to notice it by. That is what left this glass flat
+     until now. */
+  backdrop-filter: blur(4px);
   border: none;
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
   position: relative;
@@ -208,15 +212,36 @@
 }
 
 /**
- * Header variant: opaque enough that scrolling content cannot be read through
- * it. The luminosity blend that makes the base glass so delicate also cancels
- * most of a dark tint, so this composites normally.
+ * Header variant. The luminosity blend that makes the base glass so delicate
+ * also cancels most of a dark tint, so this composites normally.
  */
 @utility glass-header {
-  /* Nearly opaque on purpose. The blur would normally carry half the job, but
-     backdrop-filter is unavailable in some rendering paths and the header must
-     stay readable when it does not composite. */
-  --glass-tint: rgba(5, 6, 4, 0.93);
-  --glass-blur: 16px;
+  /* Clear glass. Deliberately no brightness() term: darkening the backdrop
+     keeps text legible but makes the bar read as a black plate the moment it
+     passes over anything paler than itself, which is most of the sky. The
+     glass takes the luminance of whatever is behind it and the labels carry
+     their own contrast instead. */
+  --glass-tint: rgba(255, 255, 255, 0.05);
   background-blend-mode: normal;
+
+  /* Compounded with .liquid-glass so this wins on specificity rather than on
+     the order Tailwind happens to emit the two utilities in. */
+  &.liquid-glass {
+    backdrop-filter: blur(22px) saturate(1.7);
+  }
+
+  /* What replaces the darkened backdrop: a shadow tight enough to sit under
+     the glyphs without fogging the glass around them. */
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.65);
+
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.18),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.06),
+    0 8px 26px rgba(0, 0, 0, 0.42);
+
+  /* Without compositing there is no blur to hide what is behind the bar, so
+     the tint has to carry it alone and falls back to the opaque treatment. */
+  @supports not (backdrop-filter: blur(1px)) {
+    --glass-tint: rgba(5, 6, 4, 0.92);
+  }
 }

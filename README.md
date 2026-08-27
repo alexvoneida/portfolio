@@ -63,7 +63,12 @@ works like the glass of a terrarium, and the greens exist only where you put it.
 The living layer is procedural: a coarse value-noise mottle picks the moss tone,
 a finer octave drives both the highlight speckle and a perturbed normal for
 micro-relief, steep faces fall back to warm rock, and a tight specular lobe
-supplies the wet sheen. Palette values are sampled from the reference photograph
+supplies the wet sheen. A fourth, finer scale and a second grass scatter are
+gated on `spotAt` — the spotlight amount with no ambient floor under it — so
+they exist only inside the pool. Anything at those frequencies would alias into
+static across the rest of the frame, and nobody is looking at it there.
+
+Palette values are sampled from the reference photograph
 and weighted to match its histogram — over half of that frame is near-black, and
 spreading the greens evenly is what makes procedural foliage look like a green
 filter instead of moss.
@@ -110,7 +115,7 @@ producing a full-viewport gradient every frame and handing it to the compositor;
 the terrain is already being shaded on the GPU, so the reveal costs one distance
 test per fragment.
 
-Three things here are easy to get wrong and were:
+Five things here are easy to get wrong and were:
 
 - **Colour space.** three applies its output encoding inside its own materials
   only. A raw `ShaderMaterial` writes straight into an sRGB drawing buffer while
@@ -122,3 +127,11 @@ Three things here are easy to get wrong and were:
 - **Uniform ownership.** The frame loop writes through a ref to the material's
   own `uniforms`, not through the memoized object passed as a prop. Only the
   material is guaranteed to be the instance bound to the compiled program.
+- **Fast Refresh does not recompile shaders.** R3F assigns a changed `fragmentShader` to the
+  material but never sets `needsUpdate`, so the GPU keeps running the old program. Reload the
+  page before judging any shader edit — an HMR update will happily show you the previous one.
+- **Prefixed `backdrop-filter`.** Never hand-write `-webkit-backdrop-filter`
+  beside the standard property in `globals.css`. Lightning CSS adds the prefix
+  itself, and given both it drops the property entirely — no build error, and
+  nothing in the CSSOM to notice it by. The nav glass was unblurred for four
+  commits because of this.
