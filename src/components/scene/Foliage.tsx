@@ -23,22 +23,62 @@ import {
 
 type Placement = { matrices: Float32Array; tints: Float32Array; count: number };
 
+/** Blade angles and offsets within a clump. Fixed, so every tuft is identical
+ *  geometry and the whole field stays one instanced draw call. */
+const BLADES = [
+  { angle: 0, offsetX: 0, offsetZ: 0, height: 1, lean: 0.06 },
+  { angle: 1.05, offsetX: 0.26, offsetZ: -0.18, height: 0.78, lean: -0.16 },
+  { angle: 2.2, offsetX: -0.22, offsetZ: 0.24, height: 0.86, lean: 0.19 },
+];
+
 /**
- * A pair of crossed, upright quads. Tapered to a point in the vertex shader, so
- * the blade silhouette needs no alpha texture, and crossed so a tuft reads from
- * any direction without billboarding.
+ * Three upright quads at different angles and slight offsets, tapered to a
+ * point in the vertex shader so the blade silhouette needs no alpha texture.
+ *
+ * Three blades per instance rather than more instances: the triangle count is
+ * the same either way, but the placement pass — which is the expensive part,
+ * being noise sampling on the main thread — only runs once per clump.
  */
 function makeTuftGeometry() {
   const geometry = new THREE.BufferGeometry();
+  const positions: number[] = [];
+  const centers: number[] = [];
+  const uvs: number[] = [];
+  const indices: number[] = [];
   const half = 0.5;
-  const positions = new Float32Array([
-    -half, 0, 0, half, 0, 0, half, 1, 0, -half, 1, 0,
-    0, 0, -half, 0, 0, half, 0, 1, half, 0, 1, -half,
-  ]);
-  const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1]);
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-  geometry.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+
+  BLADES.forEach((blade, index) => {
+    const sin = Math.sin(blade.angle);
+    const cos = Math.cos(blade.angle);
+    // Corners in blade-local space, then rotated about Y into the clump.
+    const corners: [number, number][] = [
+      [-half, 0],
+      [half, 0],
+      [half, blade.height],
+      [-half, blade.height],
+    ];
+
+    for (const [x, y] of corners) {
+      const leanX = blade.lean * y;
+      positions.push(
+        blade.offsetX + (x + leanX) * cos,
+        y,
+        blade.offsetZ - (x + leanX) * sin,
+      );
+      // The blade's own axis, so the vertex shader can taper the width without
+      // also dragging the blade back toward the middle of the clump.
+      centers.push(blade.offsetX, 0, blade.offsetZ);
+    }
+    uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+
+    const base = index * 4;
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  });
+
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geometry.setAttribute("bladeCenter", new THREE.BufferAttribute(new Float32Array(centers), 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  geometry.setIndex(indices);
   return geometry;
 }
 
@@ -134,11 +174,13 @@ export function Grass({
   const placement = useMemo(
     () =>
       scatter(
-        quality === "low" ? 6000 : 22000,
+        // Clumps, not blades: each carries three. Denser ground cover than the
+        // previous flat count, for fewer placement samples.
+        quality === "low" ? 5200 : 18000,
         0x9c455,
         // Off the cliffs and out of the river; a tuft standing in the water or
         // jutting sideways off a rock face reads as a bug.
-        (x, z, height) => height > WATER_LEVEL + 1.5 && slopeAt(x, z) < 0.55,
+        (x, z, height) => height > WATER_LEVEL + 1.5 && slopeAt(x, z, height) < 0.55,
         (random, x, z, height, matrix, tint) => {
           scratchPosition.set(x, height, z);
           scratchQuaternion.setFromAxisAngle(upAxis, random() * Math.PI);
@@ -197,10 +239,14 @@ export function Grass({
 export function Trees({
   quality,
   canopy,
+  canopyLit,
+  frost,
   haze,
 }: {
   quality: SceneQuality;
   canopy: THREE.Color;
+  canopyLit: THREE.Color;
+  frost: THREE.Color;
   haze: THREE.Color;
 }) {
   const geometry = useMemo(() => new THREE.ConeGeometry(1, 1, 7, 1), []);
@@ -217,7 +263,7 @@ export function Trees({
           height > WATER_LEVEL + 6 &&
           height > 4 &&
           height < TERRAIN.peakHeight * 0.42 &&
-          slopeAt(x, z) < 0.62,
+          slopeAt(x, z, height) < 0.62,
         (random, x, z, height, matrix, tint) => {
           const trunk = 7 + random() * 9;
           // Cone geometry is centred on its own height, so it must be lifted by
@@ -239,9 +285,11 @@ export function Trees({
     () => ({
       ...spotlightUniforms(),
       uCanopy: { value: canopy },
+      uCanopyLit: { value: canopyLit },
+      uFrost: { value: frost },
       uHaze: { value: haze },
     }),
-    [canopy, haze],
+    [canopy, canopyLit, frost, haze],
   );
 
   useEffect(() => () => geometry.dispose(), [geometry]);

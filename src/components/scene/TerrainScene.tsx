@@ -50,7 +50,9 @@ const PALETTE = {
   dust: new THREE.Color("#59614a"),
   grassBase: new THREE.Color("#141d07"),
   grassTip: new THREE.Color("#63741a"),
-  canopy: new THREE.Color("#1a2711"),
+  canopy: new THREE.Color("#141d0d"),
+  canopyLit: new THREE.Color("#2c3d1a"),
+  frost: new THREE.Color("#b9c4b2"),
   waterDeep: new THREE.Color("#060d0a"),
   waterShallow: new THREE.Color("#22403a"),
   waterSheen: new THREE.Color("#cfe8d8"),
@@ -354,7 +356,13 @@ export default function TerrainScene({ quality }: { quality: SceneQuality }) {
         sheen={PALETTE.waterSheen}
         haze={PALETTE.haze}
       />
-      <Trees quality={quality} canopy={PALETTE.canopy} haze={PALETTE.haze} />
+      <Trees
+        quality={quality}
+        canopy={PALETTE.canopy}
+        canopyLit={PALETTE.canopyLit}
+        frost={PALETTE.frost}
+        haze={PALETTE.haze}
+      />
       <Grass
         quality={quality}
         base={PALETTE.grassBase}

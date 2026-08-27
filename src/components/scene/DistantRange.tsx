@@ -26,11 +26,14 @@ const FAR_EDGE = TERRAIN.zNear - TERRAIN.depth;
 // each is lighter at the bottom, and every range sits above the sky value so
 // its silhouette separates instead of disappearing into it. Later layers are
 // lighter overall, which is the whole of aerial perspective.
+// Kept dark: these sit behind everything and should read as depth, not as
+// subject. `detail` fades the rock and snow out with distance, since the
+// farthest range is only a few dozen pixels tall on screen.
 const LAYERS = [
-  { z: FAR_EDGE - 120, width: 3200, height: 900, seed: 1.7, rough: 0.55, near: "#2a3324", far: "#1c2417" },
-  { z: FAR_EDGE - 620, width: 4400, height: 1200, seed: 4.3, rough: 0.4, near: "#333d2b", far: "#232c1d" },
-  { z: FAR_EDGE - 1300, width: 6000, height: 1600, seed: 8.1, rough: 0.3, near: "#3e4935", far: "#2b3524" },
-  { z: FAR_EDGE - 2200, width: 8000, height: 2000, seed: 12.9, rough: 0.2, near: "#4a5640", far: "#35402d" },
+  { z: FAR_EDGE - 120, width: 3200, height: 900, seed: 1.7, rough: 0.55, detail: 1, near: "#1b2116", far: "#12170f" },
+  { z: FAR_EDGE - 620, width: 4400, height: 1200, seed: 4.3, rough: 0.4, detail: 0.8, near: "#21281a", far: "#171d13" },
+  { z: FAR_EDGE - 1300, width: 6000, height: 1600, seed: 8.1, rough: 0.3, detail: 0.55, near: "#283021", far: "#1d2418" },
+  { z: FAR_EDGE - 2200, width: 8000, height: 2000, seed: 12.9, rough: 0.2, detail: 0.35, near: "#303929", far: "#242c1f" },
 ];
 
 /** Below the valley floor, so the terrain always occludes the ranges' feet. */
@@ -41,8 +44,10 @@ function Range({ layer }: { layer: (typeof LAYERS)[number] }) {
     () => ({
       uNear: { value: new THREE.Color(layer.near) },
       uFar: { value: new THREE.Color(layer.far) },
+      uSnow: { value: new THREE.Color("#8d9a86") },
       uSeed: { value: layer.seed },
       uRough: { value: layer.rough },
+      uDetail: { value: layer.detail },
     }),
     [layer],
   );

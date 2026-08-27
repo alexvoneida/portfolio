@@ -93,11 +93,17 @@ export function heightAt(x: number, z: number) {
  * Surface steepness at a point, 0 flat to 1 vertical. Used to keep scattered
  * foliage off cliff faces, where instances would stick out at right angles to
  * the ground.
+ *
+ * Forward differences against a height the caller already has, rather than
+ * central differences: this runs once per scatter attempt across tens of
+ * thousands of them, and halving the samples halves the cost of the whole
+ * placement pass. The extra accuracy of a centred gradient buys nothing for
+ * what is only ever a threshold test.
  */
-export function slopeAt(x: number, z: number, step = 4) {
-  const dx = heightAt(x + step, z) - heightAt(x - step, z);
-  const dz = heightAt(x, z + step) - heightAt(x, z - step);
-  const gradient = Math.hypot(dx, dz) / (2 * step);
+export function slopeAt(x: number, z: number, height: number, step = 4) {
+  const dx = heightAt(x + step, z) - height;
+  const dz = heightAt(x, z + step) - height;
+  const gradient = Math.hypot(dx, dz) / step;
   return gradient / Math.hypot(gradient, 1);
 }
 

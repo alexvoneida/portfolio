@@ -3,7 +3,7 @@
 import * as THREE from "three";
 
 /** Spotlight radius in CSS pixels, scaled to device pixels by the driver. */
-export const SPOTLIGHT_RADIUS = 215;
+export const SPOTLIGHT_RADIUS = 185;
 
 /**
  * A device either has a hovering pointer for the whole visit or it does not,

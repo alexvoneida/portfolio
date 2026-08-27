@@ -56,12 +56,28 @@ export const spotlightChunk = /* glsl */ `
   }
 `;
 
-/** Value noise shared by the terrain and the water ripples. */
+/**
+ * Value noise shared by the terrain, the water ripples and the sky.
+ *
+ * Lattice cells are wrapped before hashing. hash21 multiplies by ~123 before
+ * taking fract, so a cell coordinate in the thousands lands near 1e6, where a
+ * float32 ulp is around 0.0625 — fract then quantises to a handful of values
+ * and the field collapses into bands. That happens to distant terrain
+ * immediately, and to the animated water after a few minutes, once the flow
+ * offset has grown large enough. Wrapping keeps hash inputs small, and because
+ * the field is genuinely periodic at the wrap there is no seam.
+ */
 export const noiseChunk = /* glsl */ `
+  const float NOISE_PERIOD = 1024.0;
+
   float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
+  }
+
+  float latticeHash(vec2 cell) {
+    return hash21(mod(cell, NOISE_PERIOD));
   }
 
   float valueNoise(vec2 p) {
@@ -69,8 +85,8 @@ export const noiseChunk = /* glsl */ `
     vec2 f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(
-      mix(hash21(i), hash21(i + vec2(1.0, 0.0)), u.x),
-      mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x),
+      mix(latticeHash(i), latticeHash(i + vec2(1.0, 0.0)), u.x),
+      mix(latticeHash(i + vec2(0.0, 1.0)), latticeHash(i + vec2(1.0, 1.0)), u.x),
       u.y
     );
   }
@@ -316,15 +332,19 @@ export const waterFragmentShader = /* glsl */ `
   ${noiseChunk}
 
   /**
-   * Three scales carried downstream at different rates. The river runs along
-   * -z, so the dominant drift is in z; the slower cross-drift keeps the pattern
-   * from reading as a texture on a conveyor belt.
+   * Three scales carried downstream at different rates. The sampling offset is
+   * negated in z so the current runs toward the camera rather than away from
+   * it: a feature sampled at (p + d) appears at (p - d), so a positive drift
+   * would push the water down-valley.
+   *
+   * The slower cross-drift keeps the pattern from reading as a texture on a
+   * conveyor belt.
    */
   float ripple(vec2 p) {
-    float flow = uTime * 0.85;
-    return valueNoise(p + vec2(uTime * 0.06, flow * 0.55)) * 0.5
-         + valueNoise(p * 2.3 + vec2(-uTime * 0.10, flow * 0.85)) * 0.32
-         + valueNoise(p * 5.7 + vec2(uTime * 0.16, flow * 1.30)) * 0.18;
+    float flow = uTime * 2.1;
+    return valueNoise(p + vec2(uTime * 0.06, -flow * 0.55)) * 0.5
+         + valueNoise(p * 2.3 + vec2(-uTime * 0.10, -flow * 0.85)) * 0.32
+         + valueNoise(p * 5.7 + vec2(uTime * 0.16, -flow * 1.30)) * 0.18;
   }
 
   void main() {
@@ -357,10 +377,20 @@ export const waterFragmentShader = /* glsl */ `
 
     float ndh = clamp(dot(nrm, halfVec), 0.0, 1.0);
     // Two lobes: a broad sheen for the body of the river and a tighter one for
-    // the travelling highlights on the wave crests.
+    // the highlights on the wave crests. The tight lobe is kept modest — it
+    // scintillates in place rather than travelling, so leaning on it makes the
+    // water twinkle instead of flow.
     float sheen = pow(ndh, 12.0);
     float sparkle = pow(ndh, 90.0) * rippleFade;
-    color += uSheen * (sheen * 0.3 + sparkle * 0.55);
+    color += uSheen * (sheen * 0.3 + sparkle * 0.32);
+
+    // Transverse crests, stretched across the channel and compressed along it,
+    // marching upstream toward the camera. This is the term that actually reads
+    // as current: a coherent band that translates, rather than noise that
+    // reshuffles.
+    float crest = valueNoise(vec2(p.x * 2.2, p.y * 0.5 - uTime * 1.9));
+    crest = crest * 0.65 + valueNoise(vec2(p.x * 4.5, p.y * 1.1 - uTime * 2.6)) * 0.35;
+    color += uSheen * smoothstep(0.58, 0.94, crest) * 0.22 * rippleFade;
 
     color = mix(color, uHaze, pow(smoothstep(60.0, 900.0, dist), 0.8));
 
@@ -473,8 +503,10 @@ export const rangeVertexShader = /* glsl */ `
 export const rangeFragmentShader = /* glsl */ `
   uniform vec3 uNear;
   uniform vec3 uFar;
+  uniform vec3 uSnow;
   uniform float uSeed;
   uniform float uRough;
+  uniform float uDetail;
 
   varying vec2 vUv;
 
@@ -498,6 +530,17 @@ export const rangeFragmentShader = /* glsl */ `
     float toCrest = clamp(vUv.y / max(ridge, 1e-4), 0.0, 1.0);
     vec3 color = mix(uNear, uFar, toCrest * toCrest);
 
+    // Just enough relief to stop the flats reading as paper. Anisotropic on
+    // purpose: stretched vertically, the noise falls into gullies rather than
+    // mottling like lichen.
+    vec2 faceUv = vec2(vUv.x * 190.0, vUv.y * 34.0);
+    float rock = valueNoise(faceUv) * 0.6 + valueNoise(faceUv * 2.6) * 0.4;
+    color *= 1.0 + (rock - 0.5) * 0.5 * uDetail;
+
+    // Snow only on the taller peaks, and only near their crests.
+    float alpine = smoothstep(0.55, 0.92, ridge) * smoothstep(0.62, 0.95, toCrest);
+    color = mix(color, uSnow, alpine * smoothstep(0.42, 0.78, rock) * 0.55 * uDetail);
+
     gl_FragColor = vec4(toSRGB(color), 1.0);
   }
 `;
@@ -511,6 +554,7 @@ export const grassVertexShader = /* glsl */ `
   uniform float uTime;
 
   attribute vec3 tint;
+  attribute vec3 bladeCenter;
 
   varying vec3 vWorld;
   varying vec3 vTint;
@@ -520,10 +564,15 @@ export const grassVertexShader = /* glsl */ `
     vHeightFactor = uv.y;
     vTint = tint;
 
-    vec3 local = position;
-    // Taper to a point: the quad becomes a blade. Both lateral axes, because
-    // the crossed pair lies in two different planes.
-    local.xz *= 1.0 - uv.y * 0.92;
+    // Taper to a point: the quad becomes a blade. Measured from the blade's own
+    // axis, so blades keep their offsets within the clump instead of all
+    // converging on its centre as they rise.
+    float taper = 1.0 - uv.y * 0.92;
+    vec3 local = vec3(
+      bladeCenter.x + (position.x - bladeCenter.x) * taper,
+      position.y,
+      bladeCenter.z + (position.z - bladeCenter.z) * taper
+    );
 
     vec4 world = instanceMatrix * vec4(local, 1.0);
 
@@ -571,9 +620,12 @@ export const treeVertexShader = /* glsl */ `
   varying vec3 vWorld;
   varying vec3 vNrm;
   varying vec3 vTint;
+  varying float vUpFactor;
 
   void main() {
     vTint = tint;
+    // 0 at the skirt, 1 at the leader. Cone uvs run bottom to top.
+    vUpFactor = uv.y;
     vec4 world = modelMatrix * instanceMatrix * vec4(position, 1.0);
     vWorld = world.xyz;
     vNrm = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
@@ -583,23 +635,43 @@ export const treeVertexShader = /* glsl */ `
 
 export const treeFragmentShader = /* glsl */ `
   uniform vec3 uCanopy;
+  uniform vec3 uCanopyLit;
+  uniform vec3 uFrost;
   uniform vec3 uHaze;
 
   varying vec3 vWorld;
   varying vec3 vNrm;
   varying vec3 vTint;
+  varying float vUpFactor;
 
   ${encodeSRGB}
   ${spotlightChunk}
+  ${noiseChunk}
 
   void main() {
     vec3 nrm = normalize(vNrm);
     vec3 lightDir = normalize(vec3(0.28, 0.82, 0.5));
-    float ndl = clamp(dot(nrm, lightDir), 0.0, 1.0);
-
-    vec3 color = uCanopy * vTint * (0.30 + ndl * 1.1);
-
     float dist = distance(vWorld, uCamPos);
+    float detailFade = 1.0 - smoothstep(90.0, 380.0, dist);
+
+    // Needle break-up, sampled in world space so neighbouring trees never share
+    // a pattern. The vertical term keeps it from banding around the cone.
+    vec2 needleUv = vWorld.xz * 3.2 + vWorld.y * 0.9;
+    float needles = valueNoise(needleUv) * 0.6 + valueNoise(needleUv * 2.7) * 0.4;
+
+    // Denser and darker toward the skirt, thinning out at the leader.
+    float depthInCanopy = 1.0 - vUpFactor;
+    vec3 color = mix(uCanopyLit, uCanopy, depthInCanopy * 0.75);
+    color *= vTint;
+    color *= 0.72 + needles * 0.55 * detailFade;
+
+    float ndl = clamp(dot(nrm, lightDir), 0.0, 1.0);
+    color *= 0.30 + ndl * 1.1;
+
+    // Frost catching on upward faces near the top, where snow would sit.
+    float frost = smoothstep(0.55, 0.95, nrm.y) * smoothstep(0.45, 0.9, vUpFactor);
+    color += uFrost * frost * smoothstep(0.5, 0.85, needles) * 0.35 * detailFade;
+
     color = mix(color, uHaze, pow(smoothstep(80.0, 850.0, dist), 0.85));
 
     vec3 unlit = color * 0.07;
